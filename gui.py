@@ -18,10 +18,16 @@ from topics import TechTopicGenerator, VideoScript
 from upload import YouTubeUploader, ThumbnailGenerator
 
 try:
-    from translate import normalize_lang, lang_label, translate_voiceover
+    from translate import normalize_lang, lang_label, translate_voiceover, translate_text
     HAS_TRANSLATE = True
 except ImportError:
     HAS_TRANSLATE = False
+
+try:
+    from growth import apply_growth, apply_hook
+    HAS_GROWTH = True
+except ImportError:
+    HAS_GROWTH = False
 
 try:
     from ollama_gen import OllamaClient
@@ -380,6 +386,17 @@ class VideoApp:
 
             lang_tag = f"_{lang}" if lang != "en" else ""
             video_path = f"output/videos/{file_slug}{lang_tag}_{timestamp}.mp4"
+
+            # Growth boosts — cold-open hook, mid-CTA, recap, scene variation
+            if HAS_GROWTH and len(scenes) >= 3:
+                try:
+                    apply_growth(scenes, topic_source, lang, "",
+                                 translate_text if HAS_TRANSLATE else None)
+                    apply_hook(scenes, topic_source, "", lang,
+                               translate_text if HAS_TRANSLATE else None)
+                except Exception as exc:
+                    print(f"  [growth] skipped: {exc}")
+
             self._update_status("Rendering scenes...", 25)
             generator.generate_video(scenes, video_path)
             self._update_status("Video rendered!", 70)

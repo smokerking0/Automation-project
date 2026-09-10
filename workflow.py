@@ -49,6 +49,12 @@ except ImportError:
     HAS_SEO = False
 
 try:
+    from growth import apply_growth, apply_hook
+    HAS_GROWTH = True
+except ImportError:
+    HAS_GROWTH = False
+
+try:
     from stockbg import PexelsBackground
     HAS_STOCK = True
 except ImportError:
@@ -411,7 +417,7 @@ class DailyTechWorkflow:
             # scene headings (captured before the brand intro/outro are added).
             content_points = [sc.text for sc in script.scenes if (sc.text or "").strip()][:8]
             content_points = list(dict.fromkeys(content_points))
-            self._add_brand_scenes(script, topic, lang)
+            self._add_brand_scenes(script, topic, lang, seo_field)
             print(f"\n  Title: {script.title}")
             print(f"  Scenes: {len(script.scenes)}")
             print(f"  Duration: ~{script.estimated_duration/60:.1f} minutes")
@@ -574,16 +580,44 @@ class DailyTechWorkflow:
             print(f"\n  Upload failed: {type(e).__name__}: {e}")
             return None
 
-    def _add_brand_scenes(self, script, topic, lang):
+    def _add_brand_scenes(self, script, topic, lang, seo_field: str = ""):
         """Prepend the branded intro and append the CTA outro every video.
 
         Voiceover stays in the narration language (EN stays as-is; hi/ne is
         translated). On-screen text/headings stay English per the channel rule.
+
+        When the growth module is available, also injects:
+        - Cold-open hook (before the brand greeting)
+        - Mid-video engagement CTA
+        - Key-takeaways recap (before the outro)
+        - Scene variation pass for visual pattern interrupts
         """
         brand = (self.config.get("branding", {}) or {})
         if not brand.get("enabled", True):
             return
         accent = brand.get("accent_color", "#00E5FF")
+
+        # ── Growth boosts (watch-time & engagement) ──────────────────────
+        if HAS_GROWTH:
+            try:
+                apply_growth(script.scenes, script.title, lang, seo_field,
+                             translate_text if HAS_TRANSLATE else None)
+                print(f"  [growth] mid-CTA + recap + variation applied ({lang})")
+            except Exception as exc:
+                print(f"  [growth] skipped: {exc}")
+            try:
+                apply_hook(script.scenes, script.title, seo_field, lang,
+                           translate_text if HAS_TRANSLATE else None)
+                print(f"  [growth] cold-open hook added ({lang})")
+            except Exception as exc:
+                print(f"  [growth] hook skipped: {exc}")
+
+        # ── Brand intro / outro ──────────────────────────────────────────
+        # Remove any pre-existing "Thanks for Watching" or topics.py outro
+        # scene so the brand outro is the only closing scene.
+        _outro_re = re.compile(r"thanks\s+for\s+watch", re.IGNORECASE)
+        if script.scenes and _outro_re.search(script.scenes[-1].text or ""):
+            script.scenes.pop()
         intro = (brand.get("intro", "") or
                  "Hi everyone, welcome to our channel, Core Infotech!")
         suffix = (brand.get("intro_suffix", "") or "").replace("{topic}", script.title)
@@ -627,7 +661,8 @@ class DailyTechWorkflow:
         )
         script.scenes.insert(0, intro_scene)
         script.scenes.append(outro_scene)
-        print(f"  [brand] intro + outro scenes added ({lang})")
+        brand_count = 1 + 1 + (2 if HAS_GROWTH else 0)
+        print(f"  [brand] intro + outro scenes added ({lang}) + {brand_count - 2} growth scenes")
 
     def _print_results(self, results):
         print(f"\n{'='*60}")
