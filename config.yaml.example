@@ -1,0 +1,97 @@
+# ============================================================
+# Daily Tech Video Automation Configuration
+# ============================================================
+# Copy this file to config.yaml and customize as needed.
+# API keys should be set via environment variables or .env file.
+# ============================================================
+
+# Video Settings
+video:
+  width: 1280
+  height: 720
+  fps: 24
+  # Handwritten-style font for on-screen educational text (falls back to Arial)
+  font_path: "C:/Windows/Fonts/comic.ttf"
+  background_color: "#0a0a0a"
+  text_shadow: true
+  transition_duration: 0.5
+  ken_burns_zoom: 1.12
+  # Extra seconds padded to each scene so narration is never cut off.
+  # Scene duration = actual_narration_duration + safety_margin + 1.0 (overlap).
+  safety_margin: 0.20
+
+# Voice Settings (Edge TTS or gTTS)
+voice:
+  language: "en"
+  slow: false
+
+# Background Music (optional)
+music:
+  enabled: false
+  path: "assets/bgm.mp3"
+  volume: 0.3
+
+# YouTube API Settings
+# Credentials files - paths to OAuth2 client secrets and token
+youtube:
+  client_secrets: "client_secret.json"
+  credentials: "token.json"
+  default_category: "28"  # Science & Technology
+  privacy_status: "public"  # private, public, unlisted
+  # YouTube Data API v3 key - set via YOUTUBE_DATA_API_KEY env var
+  # Leave empty to fall back to free RSS channel feeds.
+  data_api_key: ""
+
+# Branded intro/outro added to every video: prepended intro scene + appended
+# CTA outro scene, each with a voiceover (kept in the video's narration
+# language). The intro_suffix can contain a {topic} placeholder.
+branding:
+  enabled: true
+  accent_color: "#00E5FF"
+  intro: "Hi everyone, welcome to our channel, Core Infotech!"
+  intro_suffix: "Today, let's dive into {topic}."
+  outro: "Thank you for watching! Don't forget to like, comment, and subscribe to our channel for the latest tech updates and informative videos."
+
+# SEO metadata (title/description/tags/hashtags) auto-generated from the
+# trending topic + field. Writes to the video's YouTube metadata at upload.
+seo:
+  enabled: true
+
+# Real Stock Backgrounds (Pexels free API)
+# API key - set via PEXELS_API_KEY env var (get key at pexels.com/api)
+stock:
+  provider: pexels
+  api_key: ""
+  cache_dir: "output/temp/stock"
+  # background_mode: "auto" | "stock" | "procedural"
+  #   auto       -> use stock photos when a key is set, else procedural art
+  #   stock      -> force real photos (falls back if network/API fails)
+  #   procedural -> ignore stock entirely
+  background_mode: "auto"
+
+# Optional presenter avatar (circular portrait mode).
+# Set either a file path or a data URI here.
+presenter:
+  avatar_path: ""
+  avatar_data_uri: ""
+
+# Ollama Remote LLM (optional, for LLM-based content generation)
+# Set OLLAMA_ENABLED, OLLAMA_HOST, OLLAMA_MODEL via env vars
+ollama:
+  enabled: false
+  host: "http://localhost:11434"
+  model: "llama3.1:70b"
+
+# Daily Automation Schedule
+schedule:
+  daily_time: "10:00"  # 24h format
+  auto_upload: false
+  default_duration: 3   # minutes
+  default_style: "educational"
+
+# Output Settings
+output:
+  directory: "output"
+  scripts_dir: "output/scripts"
+  videos_dir: "output/videos"
+  thumbnails_dir: "output/thumbnails"

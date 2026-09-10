@@ -1,0 +1,23 @@
+# Core Video Generation
+moviepy>=2.0.0
+Pillow>=10.0.0
+gTTS>=2.3.0
+edge-tts>=6.1.0
+numpy>=1.24.0
+
+# YouTube API
+google-api-python-client>=2.100.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+
+# Scheduling
+schedule>=1.2.0
+
+# Configuration
+pyyaml>=6.0
+
+# HTTP Requests
+requests>=2.31.0
+
+# DuckDuckGo search (for research.py)
+duckduckgo-search>=4.0.0

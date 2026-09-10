@@ -1,0 +1,27 @@
+# --- Credentials / secrets (never commit these) ---
+client_secret.json
+token.json
+youtube.json
+*.pem
+*.key
+.env
+config.yaml
+
+# --- Rendered output & temp media ---
+output/
+*.mp4
+*.mp3
+*.wav
+*.part.mp4
+*TEMP_MPY_wvf_snd*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# --- Local test artifacts ---
+repro_*.py
