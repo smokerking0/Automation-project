@@ -13,6 +13,23 @@ from tkinter import ttk, messagebox, filedialog
 from pathlib import Path
 from datetime import datetime
 
+
+def _load_dotenv(path: str = ".env"):
+    """Load env vars from .env (if present) without overriding real env."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    if key.strip() and key.strip() not in os.environ:
+                        os.environ[key.strip()] = value.strip()
+    except (OSError, IOError):
+        pass
+
+
+_load_dotenv()
+
 from video import CinematicVideoGenerator, VideoConfig, Scene
 from topics import TechTopicGenerator, VideoScript
 from upload import YouTubeUploader, ThumbnailGenerator
@@ -274,10 +291,8 @@ class VideoApp:
     def _load_quick(self):
         titles = None
         try:
-            from youtube_trending import YouTubeTrending
-            yt_cfg = self.cfg.get("youtube", {}) or {}
-            api_key = yt_cfg.get("data_api_key", "") or ""
-            items = YouTubeTrending(api_key=api_key).discover(top_n=12)
+            from youtube_trending import YouTubeTrending, _resolve_api_key
+            items = YouTubeTrending(api_key=_resolve_api_key()).discover(top_n=12)
             if items:
                 titles = [it.topic_dict["title"] for it in items[:6]]
         except Exception as e:
@@ -354,6 +369,10 @@ class VideoApp:
                 presenter_avatar_data=((self.cfg.get("presenter", {}) or {}).get("avatar_data_uri", "") or ""),
                 stock_background=self.stock_background,
                 background_mode=self.bg_mode_var.get(),
+                visualizer_enabled=((self.cfg.get("visualizer", {}) or {}).get("enabled", False)),
+                visualizer_opacity=((self.cfg.get("visualizer", {}) or {}).get("opacity", 0.85)),
+                visualizer_font_size=((self.cfg.get("visualizer", {}) or {}).get("font_size", 24)),
+                visualizer_font_path=((self.cfg.get("visualizer", {}) or {}).get("font_path", "C:/Windows/Fonts/comic.ttf")),
             )
             generator = CinematicVideoGenerator(config)
 
@@ -419,7 +438,16 @@ class VideoApp:
                         privacy_status="public",
                         thumbnail_path=thumb_path
                     )
-                    youtube_url = f"https://www.youtube.com/watch?v={response['id']}"
+                    video_id = response['id']
+                    youtube_url = f"https://www.youtube.com/watch?v={video_id}"
+                    # Attach the transcript as captions (SEO) when available.
+                    srt_path = getattr(generator, "last_srt_path", None)
+                    if srt_path and os.path.exists(srt_path):
+                        try:
+                            uploader.upload_captions(video_id, srt_path,
+                                                     language=lang)
+                        except Exception as cap_exc:
+                            print(f"  [upload] captions skipped: {cap_exc}")
                 except Exception as e:
                     self._update_status(f"Upload failed: {e}", 95)
                     self.root.after(0, lambda: messagebox.showerror("Upload Error", str(e)))
@@ -452,10 +480,8 @@ class VideoApp:
     def _fetch_trending(self):
         items = []
         try:
-            from youtube_trending import YouTubeTrending
-            yt_cfg = self.cfg.get("youtube", {}) or {}
-            api_key = yt_cfg.get("data_api_key", "") or ""
-            items = YouTubeTrending(api_key=api_key).discover(top_n=12)
+            from youtube_trending import YouTubeTrending, _resolve_api_key
+            items = YouTubeTrending(api_key=_resolve_api_key()).discover(top_n=12)
         except Exception as e:
             print(traceback.format_exc())
             self.root.after(0, lambda: self._update_status(f"Trending failed: {e}", 0))

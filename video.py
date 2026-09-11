@@ -26,6 +26,12 @@ from moviepy import (
 from character import CharacterRenderer2D as CharacterRenderer
 
 try:
+    from visualizer import build_scene_visual
+    HAS_VISUALIZER = True
+except ImportError:
+    HAS_VISUALIZER = False
+
+try:
     import edge_tts
     HAS_EDGE_TTS = True
 except ImportError:
@@ -94,6 +100,12 @@ class VideoConfig:
     background_mode: str = "auto"
     presenter_avatar_path: str = ""
     presenter_avatar_data: str = ""
+    # Text-to-image visualizer: animates scene content as structured visuals
+    # (infographics, flowcharts, comparisons...) synced with the narration.
+    visualizer_enabled: bool = False
+    visualizer_opacity: float = 0.85
+    visualizer_font_size: int = 24
+    visualizer_font_path: str = "C:/Windows/Fonts/comic.ttf"
 
 
 def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
@@ -1971,6 +1983,34 @@ class CinematicVideoGenerator:
             bg_base = tech_bg.generate(scene.background_prompt, scene_index, scene.visual_style)
         particles = Particles(w, h, count=12 if use_stock else 35)
 
+        # ── Text-to-image visual (optional) ──────────────────────────────
+        # Generates a structured animated visual (infographic / flowchart /
+        # comparison / stats...) from the scene content and syncs it with the
+        # narration.  The visual is composited as the primary content layer;
+        # the scene's own text/bullets are suppressed so nothing duplicates.
+        visual_render = None
+        visual_opacity = getattr(cfg, "visualizer_opacity", 0.85)
+        if HAS_VISUALIZER and getattr(cfg, "visualizer_enabled", False):
+            try:
+                visual_render = build_scene_visual(
+                    width=w, height=h,
+                    scene_text=scene.text,
+                    bullet_points=scene.bullet_points,
+                    duration=duration,
+                    scene_animation=scene.animation,
+                    scene_index=scene_index,
+                    flags={"accent": scene.text_color or "#00E5FF"},
+                    font_path=getattr(cfg, "visualizer_font_path",
+                                      "C:/Windows/Fonts/comic.ttf"),
+                    font_size=getattr(cfg, "visualizer_font_size", 24),
+                )
+                if visual_render is not None:
+                    print(f"  [visualizer] animated visual active (opacity={visual_opacity:.2f})")
+            except Exception as exc:
+                print(f"  [visualizer] skipped: {exc}")
+                visual_render = None
+        vis_active = visual_render is not None
+
         # Floating icon overlay that orbits the character position.
         icon_names = ["brain", "robot", "gear", "lightbulb", "puzzle", "database"]
         icon_overlay = FloatingIconOverlay(
@@ -2166,9 +2206,23 @@ class CinematicVideoGenerator:
             frame = bg_blended.copy()
             particles.render_to(frame, t)
 
+            # ── Animated text-to-image visual as the primary content layer ──
+            if vis_active and visual_render is not None:
+                try:
+                    vis_arr = visual_render(t)
+                    if vis_opacity < 1.0 and vis_arr.shape[:2] == (h, w):
+                        vis_arr = vis_arr.copy()
+                        # Blend toward the background using the overlay alpha.
+                        vis_arr[:, :, 3] = (vis_arr[:, :, 3].astype(np.float32)
+                                            * vis_opacity).astype(np.uint8)
+                    _alpha_composite(frame, vis_arr, 0, 0)
+                except Exception:
+                    pass
+
             # Localized dark gradient behind text so the bright stock photo
-            # stays visible while captions remain readable.
-            if panel is not None:
+            # stays visible while captions remain readable.  Not needed
+            # when a generated visual is active (the visual has its own bg).
+            if panel is not None and not vis_active:
                 _alpha_composite(frame, panel, 0, 0)
 
             # Floating icons orbiting the character position (if character is visible).
@@ -2176,11 +2230,14 @@ class CinematicVideoGenerator:
             if cx_pos is not None and floating_icons is not None:
                 floating_icons.render_to(frame, t, cx_pos + char_w_real // 2, cy_pos + char_h_real // 2)
 
-            text_frame = _get_text_frame(t)
-            _alpha_composite(frame, text_frame, 0, 0)
+            # Scene's own heading text is suppressed when a generated visual
+            # is active, since the visual already contains its own layout.
+            if not vis_active:
+                text_frame = _get_text_frame(t)
+                _alpha_composite(frame, text_frame, 0, 0)
 
             # Semantic heading icon fades in just above the heading line.
-            if heading_icon is not None:
+            if heading_icon is not None and not vis_active:
                 h_alpha = min(1.0, t / 0.5) if t < 0.5 else 1.0
                 if h_alpha > 0.02:
                     hico = heading_icon
@@ -2189,7 +2246,7 @@ class CinematicVideoGenerator:
                         hico[:, :, 3] = (hico[:, :, 3] * h_alpha).astype(np.uint8)
                     _alpha_composite(frame, hico, 0, max(0, text_top_y - 56))
 
-            if has_bullets:
+            if has_bullets and not vis_active:
                 visible_bullets = [(bt, bf) for bt, bf in bullet_frames if t >= bt]
                 if visible_bullets:
                     bullet_y_start = max(title_bottom_y + 28, int(h * 0.42))
@@ -2214,8 +2271,9 @@ class CinematicVideoGenerator:
             _alpha_composite(frame, current_bar, 0, bar_y)
 
             # Technical diagram overlay — confined to the lower band below the
-            # heading so it never collides with the on-screen text.
-            if scene.diagram_type and scene.diagram_data:
+            # heading so it never collides with the on-screen text.  Skipped
+            # when a generated visual is active (the visual owns the layout).
+            if scene.diagram_type and scene.diagram_data and not vis_active:
                 diagram_img = self.diagram_renderer.render(scene.diagram_type, scene.diagram_data, t)
                 diagram_img = self.diagram_renderer.position_diagram(
                     diagram_img, zone_top=int(h * 0.42), zone_bottom=h - 65)

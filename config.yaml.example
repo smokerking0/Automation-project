@@ -75,6 +75,16 @@ presenter:
   avatar_path: ""
   avatar_data_uri: ""
 
+# Text-to-Image animation — animates scene content as structured visuals
+# (infographics, flowcharts, comparisons, stats...) synced with narration.
+# When enabled, content scenes render an animated infographic layout over
+# their background; the scene's own heading/bullets are suppressed because
+# the visual already carries that information.
+visualizer:
+  enabled: false
+  opacity: 0.85
+  font_path: "C:/Windows/Fonts/comic.ttf"
+
 # Ollama Remote LLM (optional, for LLM-based content generation)
 # Set OLLAMA_ENABLED, OLLAMA_HOST, OLLAMA_MODEL via env vars
 ollama:

@@ -272,8 +272,12 @@ class YouTubeTrending:
                         continue
                     if _SHORT_RE.search(low):
                         continue
-                    if _HASHTAG_RE.search(low):
-                        continue
+                    # Hashtags don't disqualify a title (common on S&T videos);
+                    # the tags are just stripped so the topic reads cleanly.
+                    if _HASHTAG_RE.search(title):
+                        title = _HASHTAG_RE.sub("", title).strip()
+                        if not title:
+                            continue
                     items.append(TrendingTopic(
                         title=title,
                         channel=sn.get("channelTitle", ""),
@@ -357,9 +361,15 @@ class YouTubeTrending:
                 ranked.append((hits, it))
             ranked.sort(key=lambda t: (t[0], t[1].score), reverse=True)
             matched = [it for hits, it in ranked if hits > 0]
-            if not matched:
-                return []
-            items = matched
+            if matched:
+                # Strongest field matches first.
+                items = matched
+            else:
+                # No live match for this field: still surface the best
+                # Science & Tech items so menus/categories are never empty.
+                # FIELD_FALLBACKS in workflow.py remains the final safety net
+                # for script generation when even a general pool is tiny.
+                items = sorted(items, key=lambda i: (i.score, i.published or ""), reverse=True)[:top_n]
 
         # Dedupe by normalized title.
         seen = set()
@@ -372,10 +382,22 @@ class YouTubeTrending:
         return unique[:top_n]
 
 
-def main():
-    """CLI: list trending topics + suggested concepts."""
+def _resolve_api_key() -> str:
+    """Resolve the YouTube Data API key from env vars (incl. .env), then config."""
     import os
     import yaml
+
+    # .env file (if present) — same parsing as workflow._load_dotenv.
+    if os.path.exists(".env"):
+        try:
+            with open(".env", "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        os.environ.setdefault(k.strip(), v.strip())
+        except Exception:
+            pass
 
     api_key = ""
     try:
@@ -384,7 +406,17 @@ def main():
                 api_key = (yaml.safe_load(f).get("youtube", {}) or {}).get("data_api_key", "") or ""
     except Exception:
         pass
-    api_key = os.environ.get("YT_DATA_API_KEY", api_key)
+    # Correct env var; YT_DATA_API_KEY kept as a legacy fallback.
+    return (os.environ.get("YOUTUBE_DATA_API_KEY", "").strip()
+            or os.environ.get("YT_DATA_API_KEY", "").strip()
+            or api_key)
+
+
+def main():
+    """CLI: list trending topics + suggested concepts."""
+    import os
+
+    api_key = _resolve_api_key()
     t = YouTubeTrending(api_key=api_key)
     print(f"Source: {'YouTube Data API' if api_key else 'RSS feeds (free, no key)'}\n")
     for i, it in enumerate(t.discover(top_n=12), 1):

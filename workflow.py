@@ -443,6 +443,10 @@ class DailyTechWorkflow:
                 presenter_avatar_data=((self.config.get("presenter", {}) or {}).get("avatar_data_uri", "") or ""),
                 stock_background=self.stock_background,
                 background_mode=self.background_mode,
+                visualizer_enabled=((self.config.get("visualizer", {}) or {}).get("enabled", False)),
+                visualizer_opacity=((self.config.get("visualizer", {}) or {}).get("opacity", 0.85)),
+                visualizer_font_size=((self.config.get("visualizer", {}) or {}).get("font_size", 24)),
+                visualizer_font_path=((self.config.get("visualizer", {}) or {}).get("font_path", "C:/Windows/Fonts/comic.ttf")),
             )
             # Allow per-call override; falls back to config default
             char_enabled = (character_enabled if character_enabled is not None
@@ -973,9 +977,13 @@ def _list_topics(workflow):
             kw = FIELD_KEYWORDS.get(key, [])
             matches = [it for it in pool if _kw_match(
                 f"{it.title} {it.channel}".lower(), kw)]
+            # When nothing matches the field keywords, show the strongest
+            # general items so the category menu is never empty (discover()
+            # applies the same fallback for field-based generation).
+            shown = matches or pool[:4]
             print(f"\n{label}:")
-            if matches:
-                for it in matches[:4]:
+            if shown:
+                for it in shown[:4]:
                     print(f"   - {it.title[:95]}")
             else:
                 print("   (no live match now — curated topics cover this field)")
