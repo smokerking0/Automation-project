@@ -133,7 +133,7 @@ class VideoApp:
         row1 = tk.Frame(main, bg=BG)
         row1.pack(fill="x", pady=4)
         ttk.Label(row1, text="Topic:", width=10).pack(side="left")
-        self.topic_var = tk.StringVar(value="ai_basics")
+        self.topic_var = tk.StringVar(value="")
         self.topic_entry = ttk.Entry(row1, textvariable=self.topic_var, width=45)
         self.topic_entry.pack(side="left", padx=5)
 
@@ -299,6 +299,10 @@ class VideoApp:
             print("Quick topics refresh failed:", e)
         if not titles:
             titles = self.static_quick
+        # Prefill the topic field with the top live/current topic so the
+        # user never generates an accidental stale topic from a blank box.
+        if titles and not self.topic_var.get().strip():
+            self.topic_var.set(titles[0])
         self.root.after(0, lambda: self._apply_quick(titles))
 
     def _apply_quick(self, titles):

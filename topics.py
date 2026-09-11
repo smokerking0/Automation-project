@@ -794,8 +794,12 @@ class TechTopicGenerator:
 
         if HAS_YOUTUBE_TRENDING:
             try:
-                yt = YouTubeTrending()
-                trending = yt.get_trending_topics(limit=num_results)
+                from youtube_trending import _resolve_api_key
+                yt = YouTubeTrending(api_key=_resolve_api_key())
+                trending = [
+                    {**it.topic_dict, "source": "youtube-api", "topic": it.title}
+                    for it in yt.discover(top_n=num_results)
+                ]
             except Exception:
                 pass
 

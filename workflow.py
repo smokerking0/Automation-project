@@ -949,16 +949,24 @@ def _batch_create(workflow):
     print("  6. All Trending Topics")
     print("  7. All Topics")
     cat = input("\nSelect (1-7): ").strip()
-    cat_map = {
-        "1": "ai", "2": "gpu", "3": "data_science",
-        "4": "machine_learning", "5": "programming", "6": "trending"
-    }
-    if cat in cat_map:
-        topics = generator.get_topics_by_category(cat_map[cat])
+
+    if cat == "6":
+        # Live trending topics (Data API when a key is set, else RSS).
+        items = workflow.fetch_trending(top_n=8)
+        if not items:
+            print("  No trending topics right now — aborting batch.")
+            return
+        topics = [it.topic_dict["title"] for it in items]
+        print(f"\n  Using {len(topics)} live trending topics.")
     elif cat == "7":
-        topics = generator.get_topic_list()
+        topics = list(generator.ALL_TOPICS.keys())
+    elif cat in {"1", "2", "3", "4", "5"}:
+        cat_key = {"1": "ai", "2": "gpu", "3": "data_science",
+                   "4": "machine_learning", "5": "programming"}[cat]
+        topics = list(generator.CATEGORY_MAP[cat_key].keys())
     else:
-        topics = generator.get_topics_by_category("ai")
+        topics = list(generator.CATEGORY_MAP["ai"].keys())
+
     print(f"\nDuration: 1=1min  2=3min  3=5min")
     duration = {"1": 1, "2": 3, "3": 5}.get(input("Duration (1-3): ").strip(), 3)
     workflow.run_batch(topics=topics, duration=duration, character_enabled=True)
@@ -1034,12 +1042,19 @@ if __name__ == "__main__":
             cat = sys.argv[2] if len(sys.argv) > 2 else "ai"
             workflow = DailyTechWorkflow()
             gen = TechTopicGenerator()
-            topics = gen.get_topics_by_category(cat)
+            if cat == "trending":
+                topics = [it.topic_dict["title"]
+                          for it in workflow.fetch_trending(top_n=8)]
+            elif cat in gen.CATEGORY_MAP:
+                topics = list(gen.CATEGORY_MAP[cat].keys())
+            else:
+                topics = list(gen.ALL_TOPICS.keys())
             if not topics:
-                topics = gen.get_topic_list()
-            no_char = arg_no_char(sys.argv)
-            workflow.run_batch(topics, language=arg_lang(sys.argv),
-                               character_enabled=not no_char)
+                print("  No topics for this category — aborting batch.")
+            else:
+                no_char = arg_no_char(sys.argv)
+                workflow.run_batch(topics, language=arg_lang(sys.argv),
+                                   character_enabled=not no_char)
 
         elif cmd == "topics":
             workflow = DailyTechWorkflow()
