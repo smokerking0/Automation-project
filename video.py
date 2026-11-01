@@ -32,6 +32,12 @@ except ImportError:
     HAS_VISUALIZER = False
 
 try:
+    from visualkit import build_rich_visual
+    HAS_VISUALKIT = True
+except ImportError:
+    HAS_VISUALKIT = False
+
+try:
     import edge_tts
     HAS_EDGE_TTS = True
 except ImportError:
@@ -71,6 +77,14 @@ class Scene:
     diagram_type: Optional[str] = None
     diagram_data: Optional[dict] = None
     diagram_position: str = "bottom"
+    # Rich prompt-driven visual (visualkit painter). visual_type is one of
+    # terminal_scene/code_scene/config_scene/form_scene/dialog_scene/
+    # workflow_scene/gui_scene/error_scene/success_scene/comparison_scene/
+    # diagram_scene/list_scene/title_scene; visual_content carries the values.
+    # When set and renderable, this visual owns the frame layout and the
+    # scene's own text/bullets are suppressed (same rule as the visualizer).
+    visual_type: str = ""
+    visual_content: Optional[dict] = None
 
 
 @dataclass
@@ -84,7 +98,7 @@ class VideoConfig:
     transition_duration: float = 0.5
     ken_burns_zoom: float = 1.08
     voice_lang: str = "en"
-    character_enabled: bool = True
+    character_enabled: bool = False
     background_music: Optional[str] = None
     music_volume: float = 0.3
     # Guaranteed padding so a scene's video slot is never shorter than its
@@ -102,10 +116,15 @@ class VideoConfig:
     presenter_avatar_data: str = ""
     # Text-to-image visualizer: animates scene content as structured visuals
     # (infographics, flowcharts, comparisons...) synced with the narration.
-    visualizer_enabled: bool = False
+    visualizer_enabled: bool = True
     visualizer_opacity: float = 0.85
     visualizer_font_size: int = 24
     visualizer_font_path: str = "C:/Windows/Fonts/comic.ttf"
+    # Rich prompt-driven visuals (visualkit painters) keyed off the scene's
+    # visual_type. Independent of visualizer_enabled: when a scene carries a
+    # visual_type the painter owns the frame layout.
+    visualkit_enabled: bool = True
+    visualkit_font_path: str = "C:/Windows/Fonts/comic.ttf"
 
 
 def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
@@ -503,7 +522,7 @@ class VoiceoverGenerator:
     # slowdown + small pitch lift produces a calm, natural narrator delivery
     # instead of the default flat robotic read.
     VOICE_PROFILE = {
-        "en": {"voice": "en-US-GuyNeural", "rate": "-4%", "pitch": "+0Hz", "volume": "+0%"},
+        "en": {"voice": "en-US-GuyNeural", "rate": "-6%", "pitch": "+0Hz", "volume": "+0%"},
         "hi": {"voice": "hi-IN-MadhurNeural", "rate": "-8%", "pitch": "+2Hz", "volume": "+0%"},
         "ne": {"voice": "ne-NP-SagarNeural", "rate": "-8%", "pitch": "+2Hz", "volume": "+0%"},
     }
@@ -564,10 +583,22 @@ class VoiceoverGenerator:
             print(f"  [voice] Edge TTS error: {e}")
             return False
 
-    def cleanup(self):
+    def cleanup(self, retries: int = 3, delay: float = 0.25):
         import glob
+        import time
         for f in glob.glob(str(self.temp_dir / "voiceover_*.mp3")):
-            os.remove(f)
+            for attempt in range(retries):
+                try:
+                    os.remove(f)
+                    break
+                except PermissionError:
+                    if attempt == retries - 1:
+                        print(f"  [voice] cleanup: still locked, "
+                              f"skipping {os.path.basename(f)}")
+                    else:
+                        time.sleep(delay)
+                except OSError:
+                    break
 
 
 class AmbientMusicGenerator:
@@ -1785,10 +1816,24 @@ class CinematicVideoGenerator:
                 except OSError:
                     pass
 
-        self.voice_gen.cleanup()
+        # Close every clip resource BEFORE deleting the temp voiceovers.
+        # Each scene's AudioFileClip keeps its mp3 open via an ffmpeg
+        # subprocess; deleting first raises WinError 32 on Windows.
         for clip in clips:
-            clip.close()
-        final_video.close()
+            try:
+                if getattr(clip, "audio", None) is not None:
+                    clip.audio.close()
+            except Exception:
+                pass
+            try:
+                clip.close()
+            except Exception:
+                pass
+        try:
+            final_video.close()
+        except Exception:
+            pass
+        self.voice_gen.cleanup()
         print(f"Done: {output_path}")
         return output_path
 
@@ -1803,8 +1848,9 @@ class CinematicVideoGenerator:
         # Uses concatenate_audioclips (not CompositeAudioClip+with_start)
         # because MoviePy 2.1.2 does not reflect with_start() placement in
         # get_frame() for CompositeAudioClip - confirmed quirk.
-        PAUSE_BETWEEN_SCENES = 0.20  # natural pause between scenes (configurable)
-        LEAD_TRIM = 0.12  # trim up to 120ms of leading silence from edge-tts
+        SAFETY = getattr(self.config, "safety_margin", 0.20)
+        PAUSE_BETWEEN_SCENES = 0.20
+        LEAD_TRIM = 0.12
 
         # Extract and trim each clip's audio.
         trimmed_audios = []
@@ -1812,26 +1858,8 @@ class CinematicVideoGenerator:
             src = clip.audio
             if src is None or src.duration <= 0:
                 continue
-            # Trim leading + trailing silence from edge-tts output.
-            # Note: max_trim caps BOTH leading and trailing trim equally.
-            # Since _create_scene_clip sizes the video slot for the RAW
-            # audio duration + SAFETY_MARGIN, and we trim both ends here,
-            # the trimmed audio is shorter than the slot. We compensate by
-            # NOT trimming trailing silence - only trim leading (edge-tts
-            # warmup artifact). Trailing TTS silence provides natural scene
-            # separation. To trim both ends, increase SAFETY_MARGIN in
-            # _create_scene_clip to match the expected trim amount.
             src = _trim_silence_both_ends(src, max_trim=LEAD_TRIM)
             trimmed_audios.append(src)
-
-        # Record where each narration cue actually lands on the composed
-        # audio timeline (scene order matches clips order).
-        cue_specs = []
-        t_cursor = 0.0
-        for i, aud in enumerate(trimmed_audios):
-            cue_specs.append((t_cursor, aud.duration))
-            t_cursor += aud.duration + PAUSE_BETWEEN_SCENES
-        self._cue_specs = cue_specs
 
         if not trimmed_audios:
             composed = concatenate_videoclips(clips, method="compose", padding=-1.0)
@@ -1851,15 +1879,7 @@ class CinematicVideoGenerator:
         # Compose video with crossfade overlap.
         composed = concatenate_videoclips(clips, method="compose", padding=-1.0)
 
-        # Make sure audio matches video duration exactly.
-        # The video is composed with 1.0s overlap per scene boundary.
-        # Each scene's duration = speech_dur + SAFETY_MARGIN (0.20s).
-        # With n scenes: video_dur ≈ sum(speech_durs) + n*0.20 - (n-1)*1.0
-        #                  = sum(speech_durs) + 0.20 - (n-1)*0.80
-        # Audio: sum(trimmed_speech_durs) + (n-1)*0.20 pause
-        #         ≈ sum(speech_durs) - n*0.12 trim + (n-1)*0.20 pause
-        #         ≈ sum(speech_durs) + 0.08 - 0.12*n
-        # Audio will typically be slightly SHORTER than video, so pad if needed.
+        # Match audio to video duration.
         if full_audio.duration > composed.duration + 0.05:
             full_audio = full_audio.subclipped(0, composed.duration)
         elif full_audio.duration < composed.duration - 0.05:
@@ -1990,12 +2010,18 @@ class CinematicVideoGenerator:
         # the scene's own text/bullets are suppressed so nothing duplicates.
         visual_render = None
         visual_opacity = getattr(cfg, "visualizer_opacity", 0.85)
-        if HAS_VISUALIZER and getattr(cfg, "visualizer_enabled", False):
+        scene_has_diagram = bool(scene.diagram_type and scene.diagram_data)
+        # Only auto-generate an animated visual when the scene has no
+        # purpose-built technical diagram — otherwise the diagram itself is the
+        # visual and we avoid stacking two competing content layers.
+        if (HAS_VISUALIZER and getattr(cfg, "visualizer_enabled", False)
+                and not scene_has_diagram):
             try:
                 visual_render = build_scene_visual(
                     width=w, height=h,
                     scene_text=scene.text,
                     bullet_points=scene.bullet_points,
+                    diagram_type=scene.diagram_type,
                     duration=duration,
                     scene_animation=scene.animation,
                     scene_index=scene_index,
@@ -2010,6 +2036,32 @@ class CinematicVideoGenerator:
                 print(f"  [visualizer] skipped: {exc}")
                 visual_render = None
         vis_active = visual_render is not None
+
+        # ── Rich prompt-driven visual (visualkit) ────────────────────────
+        # A scene with a visual_type gets a purpose-built painter (terminal,
+        # code, form, workflow, ...). It owns the frame layout, so heading
+        # text and bullets are suppressed below (same rule as the visualizer).
+        rich_render = None
+        scene_vtype = getattr(scene, "visual_type", "")
+        if (scene_vtype and HAS_VISUALKIT
+                and getattr(cfg, "visualkit_enabled", True)):
+            try:
+                rich_render = build_rich_visual(
+                    visual_type=scene_vtype,
+                    visual_content=scene.visual_content or {},
+                    scene_text=scene.text or "",
+                    width=w, height=h, duration=duration,
+                    accent=scene.text_color or "#00E5FF",
+                    title_text=scene.title_text,
+                )
+                if rich_render is not None:
+                    print(f"  [visualkit] rich visual active: {scene_vtype}")
+            except Exception as exc:
+                print(f"  [visualkit] skipped: {exc}")
+                rich_render = None
+        rich_active = rich_render is not None
+        content_active = vis_active or rich_active
+        content_render = rich_render if rich_active else visual_render
 
         # Floating icon overlay that orbits the character position.
         icon_names = ["brain", "robot", "gear", "lightbulb", "puzzle", "database"]
@@ -2206,10 +2258,10 @@ class CinematicVideoGenerator:
             frame = bg_blended.copy()
             particles.render_to(frame, t)
 
-            # ── Animated text-to-image visual as the primary content layer ──
-            if vis_active and visual_render is not None:
+            # ── Animated content layer (visualkit rich visual / or visualizer) ──
+            if content_active and content_render is not None:
                 try:
-                    vis_arr = visual_render(t)
+                    vis_arr = content_render(t)
                     if vis_opacity < 1.0 and vis_arr.shape[:2] == (h, w):
                         vis_arr = vis_arr.copy()
                         # Blend toward the background using the overlay alpha.
@@ -2222,7 +2274,7 @@ class CinematicVideoGenerator:
             # Localized dark gradient behind text so the bright stock photo
             # stays visible while captions remain readable.  Not needed
             # when a generated visual is active (the visual has its own bg).
-            if panel is not None and not vis_active:
+            if panel is not None and not content_active:
                 _alpha_composite(frame, panel, 0, 0)
 
             # Floating icons orbiting the character position (if character is visible).
@@ -2232,12 +2284,12 @@ class CinematicVideoGenerator:
 
             # Scene's own heading text is suppressed when a generated visual
             # is active, since the visual already contains its own layout.
-            if not vis_active:
+            if not content_active:
                 text_frame = _get_text_frame(t)
                 _alpha_composite(frame, text_frame, 0, 0)
 
             # Semantic heading icon fades in just above the heading line.
-            if heading_icon is not None and not vis_active:
+            if heading_icon is not None and not content_active:
                 h_alpha = min(1.0, t / 0.5) if t < 0.5 else 1.0
                 if h_alpha > 0.02:
                     hico = heading_icon
@@ -2246,7 +2298,7 @@ class CinematicVideoGenerator:
                         hico[:, :, 3] = (hico[:, :, 3] * h_alpha).astype(np.uint8)
                     _alpha_composite(frame, hico, 0, max(0, text_top_y - 56))
 
-            if has_bullets and not vis_active:
+            if has_bullets and not content_active:
                 visible_bullets = [(bt, bf) for bt, bf in bullet_frames if t >= bt]
                 if visible_bullets:
                     bullet_y_start = max(title_bottom_y + 28, int(h * 0.42))
@@ -2273,7 +2325,7 @@ class CinematicVideoGenerator:
             # Technical diagram overlay — confined to the lower band below the
             # heading so it never collides with the on-screen text.  Skipped
             # when a generated visual is active (the visual owns the layout).
-            if scene.diagram_type and scene.diagram_data and not vis_active:
+            if scene.diagram_type and scene.diagram_data and not content_active:
                 diagram_img = self.diagram_renderer.render(scene.diagram_type, scene.diagram_data, t)
                 diagram_img = self.diagram_renderer.position_diagram(
                     diagram_img, zone_top=int(h * 0.42), zone_bottom=h - 65)

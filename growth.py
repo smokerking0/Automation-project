@@ -106,8 +106,6 @@ def build_recap(topic: str, scene_titles: List[str],
                 translate: Optional[Callable] = None) -> Scene:
     """Key-takeaways recap placed right before the outro."""
     topic_label = (topic or "this topic").strip()
-    vo = _RECAP_BODY_EN.replace("{topic}", topic_label)
-    vo = _translate(vo, lang, translate)
     bullets = []
     for t in scene_titles[:6]:
         short = (t or "").strip()
@@ -115,6 +113,14 @@ def build_recap(topic: str, scene_titles: List[str],
             short = short[:67] + "..."
         if short:
             bullets.append(short)
+    if bullets:
+        joined = "; ".join(bullets[:4])
+        vo = (f"Let's recap what we covered on {topic_label}: {joined}. "
+              f"If you remember these points, you have a solid grasp of the topic.")
+    else:
+        vo = (f"Let's recap what we covered on {topic_label}. "
+              f"Master the fundamentals and the rest follows naturally.")
+    vo = _translate(vo, lang, translate)
     return Scene(
         text=_RECAP_HEADING_EN,
         title_text=_RECAP_HEADING_EN,

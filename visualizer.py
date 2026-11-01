@@ -332,6 +332,7 @@ class SceneVisualizer:
 # ---------------------------------------------------------------------------
 def build_scene_visual(width: int, height: int, scene_text: str,
                        bullet_points: Optional[List[str]] = None,
+                       diagram_type: Optional[str] = None,
                        duration: float = 6.0,
                        scene_animation: str = "fade",
                        scene_index: int = 0,
@@ -351,6 +352,7 @@ def build_scene_visual(width: int, height: int, scene_text: str,
     visual = sv.visualize(
         scene_text=scene_text,
         bullet_points=bullet_points,
+        diagram_type=diagram_type,
         duration=duration,
         scene_animation=scene_animation,
         scene_index=scene_index,

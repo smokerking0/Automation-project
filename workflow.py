@@ -1,4 +1,4 @@
-"""
+﻿"""
 Daily Tech Video Automation Workflow
 Automates daily AI, Programming, and Tech video creation + YouTube upload.
 """
@@ -23,7 +23,15 @@ from video import CinematicVideoGenerator, VideoConfig, Scene
 from topics import TechTopicGenerator, VideoScript
 from upload import YouTubeUploader, ThumbnailGenerator
 from topic_tracker import TopicTracker
-
+from channel_analytics import (
+    get_channel_info,
+    get_recent_video_stats,
+    get_video_stats,
+    get_analytics_report,
+    get_period_comparison,
+    get_channel_performance_summary,
+    export_video_stats_to_csv,
+)
 try:
     from ollama_gen import OllamaClient
     HAS_OLLAMA = True
@@ -67,6 +75,12 @@ try:
     HAS_TRENDING = True
 except ImportError:
     HAS_TRENDING = False
+
+try:
+    from learning import generate_workflow, workflow_to_scenes, validate_workflow
+    HAS_LEARNING = True
+except ImportError:
+    HAS_LEARNING = False
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 
@@ -173,14 +187,17 @@ class DailyTechWorkflow:
         if not script.scenes or len(script.scenes) < 4:
             raise ValueError(f"Script too short: {len(script.scenes)} scenes (need >=4)")
         total = sum(len(s.voiceover or "") for s in script.scenes)
-        if total < 500:
-            raise ValueError(f"Script voiceover too short ({total} chars) — need richer explanation")
+        minutes = max(1.0, (getattr(script, "estimated_duration", 0) or 0) / 60.0)
+        min_chars = max(400, int(minutes * 550))
+        if total < min_chars:
+            raise ValueError(f"Script voiceover too short ({total} chars) â€” need richer explanation (target {min_chars})")
         total_words = sum(len((s.voiceover or "").split()) for s in script.scenes)
-        if total_words < 500:
-            raise ValueError(f"Script narration too short ({total_words} words) — target is 700-1,200 words")
+        min_words = max(200, int(minutes * 180))
+        if total_words < min_words:
+            raise ValueError(f"Script narration too short ({total_words} words) â€” target is {min_words}-{max(300, min_words * 2)} words")
         texts = [s.text.strip().lower() for s in script.scenes if s.text]
         if len(texts) != len(set(texts)):
-            raise ValueError("Duplicate scene titles detected — script not grounded")
+            raise ValueError("Duplicate scene titles detected â€” script not grounded")
         # Title must reflect the requested topic
         if topic:
             tks = [w for w in topic.lower().replace("_"," ").split() if len(w) > 2]
@@ -190,7 +207,7 @@ class DailyTechWorkflow:
         # Detect repeated generic bodies across points
         bodies = [(s.voiceover or "").strip()[:160].lower() for s in script.scenes[1:-1] if s.voiceover]
         if len(bodies) >= 3 and len(set(bodies)) == 1:
-            raise ValueError("All point voiceovers identical — grounding failed")
+            raise ValueError("All point voiceovers identical â€” grounding failed")
         generic_phrases = ["in this video we will discuss", "is a key area of modern technology", "core idea behind"]
         for s in script.scenes:
             low = (s.voiceover or "").lower()
@@ -215,7 +232,8 @@ class DailyTechWorkflow:
                 return cat
         return "ai"
 
-    def fetch_trending(self, top_n: int = 12, field: str = "") -> list:
+    def fetch_trending(self, top_n: int = 12, field: str = "",
+                       field_strict: bool = False) -> list:
         """Fetch current YouTube Science & Tech trending topics (live).
 
         Uses the YouTube Data API most-popular chart when a key is configured
@@ -223,6 +241,10 @@ class DailyTechWorkflow:
         `field` from FIELD_MENU (e.g. "windows", "containers", "ai_ml") to
         rank results toward that category. Returns a list of TrendingTopic
         ready for selection or video generation.
+
+        `field_strict=True` keeps results limited to topics that genuinely
+        match the field's keywords (used when a user picks one category);
+        otherwise a general pool fallback keeps menus from being empty.
         """
         if not HAS_TRENDING:
             print("  [trending] youtube_trending.py unavailable")
@@ -231,10 +253,33 @@ class DailyTechWorkflow:
         label = dict(FIELD_MENU).get(field, "General")
         print(f"  [trending] field={label} | fetching from: {src}")
         try:
-            return YouTubeTrending(api_key=self.youtube_api_key, timeout=15).discover(top_n=top_n, field=field)
+            items = YouTubeTrending(api_key=self.youtube_api_key, timeout=15).discover(
+                top_n=top_n, field=field, field_strict=field_strict)
         except Exception as e:
             print(f"  [trending] failed: {e}")
             return []
+
+        # Skip topics already used (prevents the same trending item from being
+        # picked again and again across runs).
+        try:
+            used = { (r.get("title") or "").strip().lower()
+                     for r in self.tracker.get_summary() }
+            if used:
+                filtered = [it for it in items
+                            if (it.title or "").strip().lower() not in used
+                            and (it.topic_dict.get("title") or "").strip().lower() not in used]
+                if filtered:
+                    items = filtered
+        except Exception:
+            pass
+
+        if not items:
+            print("  [trending] all live topics already used; showing full pool.")
+        # Warn when no API key is set so the user knows why results are stale.
+        if not self.youtube_api_key:
+            print("  [trending] TIP: set YOUTUBE_DATA_API_KEY in .env for fresher, "
+                  "more relevant trending topics (free, 10k units/day).")
+        return items
 
     def _auto_trending_topic(self, topic: str):
         """
@@ -299,14 +344,15 @@ class DailyTechWorkflow:
                 seo_field = next((f for f, kws in FIELD_KEYWORDS.items()
                                   if any(_kw_match(kw, s) for s in infer_src for kw in kws)), "")
 
-            # Only auto-search trending when caller didn't give an explicit
-            # known topic. Explicit keys like `rag_vs_finetuning` must render
-            # that topic, not a random trending video about GPT-6.
-            is_known = topic in self.topic_generator.ALL_TOPICS
+            # Only auto-search trending when the caller explicitly asked for a
+            # *trending* topic. A topic the user actually named (custom topic,
+            # CLI --topic, batch, daily) must render that topic itself, never a
+            # random trending item — otherwise a "FortiGate VPN" tutorial
+            # silently becomes an unrelated video.
             should_trend = (
                 topic_dict is None
                 and HAS_TRENDING
-                and (topic.startswith("trending_") or not is_known)
+                and topic.startswith("trending_")
             )
             if should_trend:
                 print(f"\n  Searching trending YouTube topics related to: {topic}")
@@ -364,7 +410,7 @@ class DailyTechWorkflow:
                     ollama_dict = self.ollama.generate_video_script(
                         topic=topic, style=style, duration_minutes=duration, research_text=research_text)
                     if ollama_dict:
-                        print(f"  Ollama: grounded script ready — {ollama_dict.get('title','')[:60]}")
+                        print(f"  Ollama: grounded script ready â€” {ollama_dict.get('title','')[:60]}")
                 except Exception as e:
                     print(f"  Ollama failed, falling back to templates: {e}")
                     ollama_dict = None
@@ -393,11 +439,11 @@ class DailyTechWorkflow:
                         sc.voiceover = vos[idx].strip()
             # Attach sources to description for traceability.
             if research_snippets:
-                src_lines = "\n".join(f"• {s['title']} — {s['url']}" for s in research_snippets[:5])
+                src_lines = "\n".join(f"â€¢ {s['title']} â€” {s['url']}" for s in research_snippets[:5])
                 script.description = script.description.strip() + "\n\nSources:\n" + src_lines
             self._validate_script(script, topic=topic)
 
-            # Only the spoken narration is translated — on-screen text stays
+            # Only the spoken narration is translated â€” on-screen text stays
             # English. This lets the male Hindi/Nepali voice speak properly.
             if HAS_TRANSLATE and lang != "en":
                 print(f"  Translating narration to {lang_name} (text stays English)...")
@@ -426,73 +472,12 @@ class DailyTechWorkflow:
             print(f"  STEP 2: Generating Video")
             print(f"{'='*60}")
 
-            # Preview: auto downscale for 4x faster render
-            pv_w, pv_h, pv_fps = self.config["video"]["width"], self.config["video"]["height"], self.config["video"]["fps"]
-            if preview:
-                pv_w, pv_h, pv_fps = 640, 360, 20
-                print(f"  Preview config: {pv_w}x{pv_h} @ {pv_fps}fps (fast)")
-            video_config = VideoConfig(
-                width=pv_w,
-                height=pv_h,
-                fps=pv_fps,
-                ken_burns_zoom=self.config["video"].get("ken_burns_zoom", 1.15),
-                transition_duration=self.config["video"].get("transition_duration", 0.5),
-                safety_margin=self.config["video"].get("safety_margin", 0.20),
-                voice_lang=lang,
-                presenter_avatar_path=((self.config.get("presenter", {}) or {}).get("avatar_path", "") or ""),
-                presenter_avatar_data=((self.config.get("presenter", {}) or {}).get("avatar_data_uri", "") or ""),
-                stock_background=self.stock_background,
-                background_mode=self.background_mode,
-                visualizer_enabled=((self.config.get("visualizer", {}) or {}).get("enabled", False)),
-                visualizer_opacity=((self.config.get("visualizer", {}) or {}).get("opacity", 0.85)),
-                visualizer_font_size=((self.config.get("visualizer", {}) or {}).get("font_size", 24)),
-                visualizer_font_path=((self.config.get("visualizer", {}) or {}).get("font_path", "C:/Windows/Fonts/comic.ttf")),
+            self._render_and_publish(
+                script=script, topic=topic, lang=lang,
+                seo_field=seo_field, content_points=content_points,
+                upload=upload, privacy=privacy, preview=preview,
+                character_enabled=character_enabled, results=results,
             )
-            # Allow per-call override; falls back to config default
-            char_enabled = (character_enabled if character_enabled is not None
-                            else self.config.get("video", {}).get("character_enabled", True))
-            video_config.character_enabled = char_enabled
-
-            print(f"  Character on screen: {'yes' if char_enabled else 'no'}")
-
-            self.video_generator = CinematicVideoGenerator(video_config)
-
-            lang_tag = f"_{lang}" if lang != "en" else ""
-            video_path = f"output/videos/{topic}{lang_tag}_{timestamp}.mp4"
-            self.video_generator.generate_video(script.scenes, video_path)
-            results["video_path"] = video_path
-
-            print(f"\n{'='*60}")
-            print(f"  STEP 3: Generating Thumbnail")
-            print(f"{'='*60}")
-
-            thumbnail_path = f"output/thumbnails/{topic}_{timestamp}.jpg"
-            try:
-                self.thumbnail_generator.generate_thumbnail(
-                    title=script.title, output_path=thumbnail_path,
-                    character_enabled=char_enabled,
-                )
-                print(f"  Thumbnail: {thumbnail_path}")
-            except Exception as e:
-                thumbnail_path = None
-                print(f"  Thumbnail generation failed (non-fatal): {e}")
-
-            if upload:
-                print(f"\n{'='*60}")
-                print(f"  STEP 4: Uploading to YouTube")
-                print(f"{'='*60}")
-                srt_path = getattr(self.video_generator, "last_srt_path", None)
-                chapters = getattr(self.video_generator, "chapters", [])
-                youtube_url = self._upload_video(
-                    video_path=video_path, script=script,
-                    thumbnail_path=thumbnail_path, privacy=privacy,
-                    seo_field=seo_field, content_points=content_points,
-                    srt_path=srt_path, chapters=chapters, lang=lang,
-                )
-                results["youtube_url"] = youtube_url
-                results["video_id"] = getattr(self, "_last_video_id", None)
-                results["srt_path"] = srt_path if srt_path and os.path.exists(srt_path) else None
-                results["seo"] = getattr(self, "_last_seo", None)
 
             results["success"] = True
             # Update tracker: success
@@ -518,6 +503,216 @@ class DailyTechWorkflow:
 
         return results
 
+    def _render_and_publish(self, script, topic, lang, seo_field,
+                            content_points, upload, privacy, preview,
+                            character_enabled, results):
+        """Render video + thumbnail, then upload. Shared by the template topic
+        pipeline and the prompt-driven pipeline so both render identically."""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        cfg_video = self.config.get("video", {})
+        cfg_learn = self.config.get("learning", {}) or {}
+        learning_enabled = cfg_learn.get("enabled", False)
+        rich_visuals = cfg_learn.get("rich_visuals", False)
+
+        # Preview: auto downscale for 4x faster render
+        pv_w = cfg_video.get("width", 1920)
+        pv_h = cfg_video.get("height", 1080)
+        pv_fps = cfg_video.get("fps", 30)
+        if preview:
+            pv_w, pv_h, pv_fps = 640, 360, 20
+            print(f"  Preview config: {pv_w}x{pv_h} @ {pv_fps}fps (fast)")
+        video_config = VideoConfig(
+            width=pv_w,
+            height=pv_h,
+            fps=pv_fps,
+            ken_burns_zoom=cfg_video.get("ken_burns_zoom", 1.15),
+            transition_duration=cfg_video.get("transition_duration", 0.5),
+            safety_margin=cfg_video.get("safety_margin", 0.20),
+            voice_lang=lang,
+            presenter_avatar_path=((self.config.get("presenter", {}) or {}).get("avatar_path", "") or ""),
+            presenter_avatar_data=((self.config.get("presenter", {}) or {}).get("avatar_data_uri", "") or ""),
+            stock_background=self.stock_background,
+            background_mode=self.background_mode,
+            visualizer_enabled=((self.config.get("visualizer", {}) or {}).get("enabled", True)),
+            visualizer_opacity=((self.config.get("visualizer", {}) or {}).get("opacity", 0.85)),
+            visualizer_font_size=((self.config.get("visualizer", {}) or {}).get("font_size", 24)),
+            visualizer_font_path=((self.config.get("visualizer", {}) or {}).get("font_path", "C:/Windows/Fonts/comic.ttf")),
+            visualkit_enabled=bool(learning_enabled and rich_visuals),
+            visualkit_font_path=cfg_learn.get("font_path", "C:/Windows/Fonts/comic.ttf"),
+        )
+        # Allow per-call override; falls back to config default. The default
+        # is OFF: the pipeline produces pure text-to-video visuals unless a
+        # character is explicitly requested.
+        char_enabled = (character_enabled if character_enabled is not None
+                        else cfg_video.get("character_enabled", False))
+        video_config.character_enabled = char_enabled
+
+        print(f"  Character on screen: {'yes' if char_enabled else 'no'}")
+
+        self.video_generator = CinematicVideoGenerator(video_config)
+
+        lang_tag = f"_{lang}" if lang != "en" else ""
+        video_path = f"output/videos/{topic}{lang_tag}_{timestamp}.mp4"
+        self.video_generator.generate_video(script.scenes, video_path)
+        results["video_path"] = video_path
+
+        print(f"\n{'='*60}")
+        print(f"  STEP 3: Generating Thumbnail")
+        print(f"{'='*60}")
+
+        thumbnail_path = f"output/thumbnails/{topic}_{timestamp}.jpg"
+        try:
+            self.thumbnail_generator.generate_thumbnail(
+                title=script.title, output_path=thumbnail_path,
+                character_enabled=char_enabled,
+            )
+            print(f"  Thumbnail: {thumbnail_path}")
+        except Exception as e:
+            thumbnail_path = None
+            print(f"  Thumbnail generation failed (non-fatal): {e}")
+        results["thumbnail_path"] = thumbnail_path
+
+        if upload:
+            print(f"\n{'='*60}")
+            print(f"  STEP 4: Uploading to YouTube")
+            print(f"{'='*60}")
+            srt_path = getattr(self.video_generator, "last_srt_path", None)
+            chapters = getattr(self.video_generator, "chapters", [])
+            youtube_url = self._upload_video(
+                video_path=video_path, script=script,
+                thumbnail_path=thumbnail_path, privacy=privacy,
+                seo_field=seo_field, content_points=content_points,
+                srt_path=srt_path, chapters=chapters, lang=lang,
+            )
+            results["youtube_url"] = youtube_url
+            results["video_id"] = getattr(self, "_last_video_id", None)
+            results["srt_path"] = srt_path if srt_path and os.path.exists(srt_path) else None
+            results["seo"] = getattr(self, "_last_seo", None)
+
+    def create_video_from_prompt(
+        self, prompt: str, duration: int = 3, upload: bool = False,
+        privacy: str = "public", language: Optional[str] = None,
+        character_enabled: Optional[bool] = None, preview: bool = False,
+    ) -> dict:
+        """Prompt-driven pipeline: the request text is the source of truth.
+
+        learning.generate_workflow() turns the prompt into a topic-specific
+        workflow (sections, steps, commands, errors, examples) and each step
+        carries a content-based visual_type, so the visuals always describe
+        what the narrator says. Nothing is pre-scripted per topic.
+        """
+        results = {
+            "success": False, "prompt": prompt, "title": "",
+            "script_path": None, "workflow_path": None, "video_path": None,
+            "thumbnail_path": None, "youtube_url": None,
+            "estimated_duration": 0, "error": None,
+        }
+        if not prompt or not prompt.strip():
+            results["error"] = "Empty prompt"
+            return results
+        if not HAS_LEARNING:
+            results["error"] = "learning.py unavailable"
+            print("  [prompt] learning.py not found â€” run from the project root.")
+            return results
+
+        try:
+            prompt = prompt.strip()
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            lang = normalize_lang(language or self.config.get("voice", {}).get("language", "en"))
+            lang_name = lang_label(lang) if HAS_TRANSLATE else lang
+            duration = max(1, min(int(duration), 5))
+
+            print(f"\n{'='*60}")
+            print(f"  PROMPT -> WORKFLOW ({prompt[:80]})")
+            print(f"{'='*60}")
+
+            # 1. Build the workflow from the prompt text.
+            wscript = generate_workflow(prompt, duration=float(duration))
+            ok, issues, fixed = validate_workflow(wscript.steps, prompt)
+            if fixed:
+                wscript.steps = fixed
+            print(f"  [prompt] domain={wscript.domain} | steps={len(wscript.steps)} "
+                  f"| ~{wscript.estimated_duration:.0f}s")
+            for si, st in enumerate(wscript.steps, 1):
+                print(f"    {si:>2}. [{st.section:>10}] {st.visual_type:<16} {st.title}")
+            if issues:
+                print(f"  [prompt] validation notes: {'; '.join(issues)}")
+
+            # 2. Steps -> renderer scenes (visual_type travels along).
+            scenes = workflow_to_scenes(wscript)
+
+            # 3. Wrap in the VideoScript contract the shared pipeline expects.
+            from topics import VideoScript
+            view = VideoScript(
+                title=wscript.title,
+                description=wscript.description,
+                tags=wscript.tags,
+                scenes=scenes,
+                thumbnail_text=wscript.title[:48],
+                category="Education",
+                estimated_duration=wscript.estimated_duration,
+            )
+
+            self.tracker.log(topic=wscript.title, title=wscript.title,
+                             status="generating", notes="Prompt pipeline started")
+
+            # 4. Save the workflow JSON (full step model) + script JSON.
+            slug = re.sub(r"[^a-z0-9]+", "_", wscript.title.lower()).strip("_")[:48] or "prompt"
+            workflow_path = f"output/scripts/{slug}_workflow_{timestamp}.json"
+            Path(workflow_path).parent.mkdir(parents=True, exist_ok=True)
+            import json as _json
+            with open(workflow_path, "w", encoding="utf-8") as f:
+                _json.dump(wscript.to_dict(), f, indent=2, ensure_ascii=False)
+            results["workflow_path"] = workflow_path
+            print(f"  Workflow saved: {workflow_path}")
+
+            self._validate_script(view, topic=wscript.title)
+
+            if HAS_TRANSLATE and lang != "en":
+                print(f"  Translating narration to {lang_name} (text stays English)...")
+                view = translate_voiceover(view, lang)
+
+            script_path = f"output/scripts/{slug}_{timestamp}.json"
+            self.topic_generator.save_script(view, script_path)
+            results["script_path"] = script_path
+            results["title"] = view.title
+            results["estimated_duration"] = view.estimated_duration
+
+            # Bullet points for SEO from the working scene headings (captured
+            # before the brand intro/outro are added).
+            content_points = [sc.text for sc in view.scenes if (sc.text or "").strip()][:8]
+            content_points = list(dict.fromkeys(content_points))
+            self._add_brand_scenes(view, slug, lang, "")
+            print(f"\n  Title: {view.title}")
+            print(f"  Scenes: {len(view.scenes)}")
+            print(f"  Duration: ~{view.estimated_duration/60:.1f} minutes")
+
+            self._render_and_publish(
+                script=view, topic=slug, lang=lang, seo_field="",
+                content_points=content_points, upload=upload,
+                privacy=privacy, preview=preview,
+                character_enabled=character_enabled, results=results,
+            )
+
+            results["success"] = True
+            self.tracker.update_status(
+                topic=wscript.title, status="done",
+                youtube_url=results["youtube_url"],
+                notes=f"Prompt video created: {results['video_path']}",
+            )
+            self._print_results(results)
+
+        except Exception as e:
+            results["error"] = str(e)
+            print(f"\nError: {e}")
+            import traceback
+            traceback.print_exc()
+            self.tracker.update_status(
+                topic=prompt[:60], status="failed", notes=f"Error: {str(e)}",
+            )
+
+        return results
+
     def _upload_video(self, video_path, script, thumbnail_path, privacy,
                       seo_field="", content_points=None, srt_path=None,
                       chapters=None, lang="en"):
@@ -527,7 +722,7 @@ class DailyTechWorkflow:
                 credentials_path=self.config["youtube"]["credentials"]
             )
         except Exception as auth_exc:
-            print(f"\n  YouTube upload SKIPPED — authentication failed: {auth_exc}")
+            print(f"\n  YouTube upload SKIPPED â€” authentication failed: {auth_exc}")
             print("  To fix: run `py upload.py setup` in a standalone terminal,")
             print("  complete the browser OAuth flow, then re-run the pipeline.")
             return None
@@ -542,7 +737,7 @@ class DailyTechWorkflow:
                 print(f"  [SEO] Tags: {', '.join(seo['tags'])}")
                 print(f"  [SEO] Hashtags: {', '.join(seo['hashtags'])}")
             except Exception as e:
-                print(f"  [SEO] metadata build failed ({e}) — using plain script metadata")
+                print(f"  [SEO] metadata build failed ({e}) â€” using plain script metadata")
                 seo = {"title": script.title, "description": script.description,
                        "tags": script.tags or []}
         else:
@@ -601,7 +796,7 @@ class DailyTechWorkflow:
             return
         accent = brand.get("accent_color", "#00E5FF")
 
-        # ── Growth boosts (watch-time & engagement) ──────────────────────
+        # â”€â”€ Growth boosts (watch-time & engagement) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         if HAS_GROWTH:
             try:
                 apply_growth(script.scenes, script.title, lang, seo_field,
@@ -616,7 +811,7 @@ class DailyTechWorkflow:
             except Exception as exc:
                 print(f"  [growth] hook skipped: {exc}")
 
-        # ── Brand intro / outro ──────────────────────────────────────────
+        # â”€â”€ Brand intro / outro â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         # Remove any pre-existing "Thanks for Watching" or topics.py outro
         # scene so the brand outro is the only closing scene.
         _outro_re = re.compile(r"thanks\s+for\s+watch", re.IGNORECASE)
@@ -681,7 +876,110 @@ class DailyTechWorkflow:
             print(f"  YouTube: {results['youtube_url']}")
         print(f"{'='*60}\n")
 
-    def run_daily(self, upload=False, privacy="public", language: Optional[str] = None, character_enabled: bool = True):
+    # ------------------------------------------------------------------
+    # Channel analytics
+    # ------------------------------------------------------------------
+
+    def show_channel_info(self):
+        """Display channel title, description, subscribers, total views, video count."""
+        print(f"\n{'='*60}")
+        print(f"  CHANNEL INFORMATION")
+        print(f"{'='*60}")
+        info = get_channel_info()
+        if "error" in info:
+            print(f"  Error: {info['error']}")
+            return info
+        print(f"  Channel:  {info['title']}")
+        print(f"  URL:      youtube.com/{info['custom_url']}")
+        print(f"  Videos:   {info['video_count']:,}")
+        print(f"  Views:    {info['view_count']:,}")
+        sub = info['subscriber_count']
+        if info.get('hidden_subscriber_count'):
+            print(f"  Subscribers:  (hidden by YouTube)")
+        else:
+            print(f"  Subscribers:  {sub:,}")
+        print(f"  Description: {info['description'][:120]}")
+        print(f"{'='*60}\n")
+        return info
+
+    def show_recent_videos(self, max_results: int = 10):
+        """List recent uploads with views, likes, comments."""
+        print(f"\n{'='*60}")
+        print(f"  RECENT UPLOADS ({max_results})")
+        print(f"{'='*60}")
+        videos = get_recent_video_stats(max_results=max_results)
+        if not videos:
+            print("  No recent uploads found or API unavailable.")
+            return videos
+        for i, v in enumerate(videos, 1):
+            if "error" in v:
+                print(f"  {i}. Error: {v['error']}")
+                continue
+            print(f"  {i}. {v['title'][:70]}")
+            print(f"     Views: {v['views']:,}  |  Likes: {v['likes']:,}  |  Comments: {v['comments']:,}")
+            print(f"     Published: {v['published_at'][:10]}  |  Duration: {v['duration']}")
+        print(f"{'='*60}\n")
+        return videos
+
+    def show_performance_comparison(self, days: int = 28, video_ids=None):
+        """Show current vs previous period comparison for key metrics."""
+        print(f"\n{'='*60}")
+        print(f"  PERFORMANCE COMPARISON")
+        print(f"  Current: {days}-day period vs previous {days}-day period")
+        print(f"{'='*60}")
+        result = get_period_comparison(days=days, video_ids=video_ids)
+        if "error" in result:
+            print(f"  Error: {result['error']}")
+            return result
+        print(f"  Period: {result['current_period']}")
+        print(f"  vs    : {result['previous_period']}")
+        print()
+        comp = result['comparison']
+        for metric, vals in comp.items():
+            arrow = "â–²" if vals['change'] > 0 else ("â–¼" if vals['change'] < 0 else "â€”")
+            print(f"  {metric:25s}: {vals['current']:>12,}  {arrow} {vals['change_percent']:+6.1f}%")
+        print(f"{'='*60}\n")
+        return result
+
+    def export_channel_performance(self, max_videos: int = 20, csv_path: str = "output/channel_performance.csv"):
+        """Export recent video stats to CSV for external analysis."""
+        videos = get_recent_video_stats(max_results=max_videos)
+        path = export_video_stats_to_csv(videos, csv_path)
+        print(f"\n  Exported {len(videos)} video records to: {path}")
+        return path
+
+    def show_full_performance_report(self):
+        """Full channel report: info + recent videos + period comparison."""
+        print(f"\n{'='*60}")
+        print(f"  FULL CHANNEL PERFORMANCE REPORT")
+        print(f"{'='*60}")
+        report = get_channel_performance_summary()
+        if "error" in report.get("channel", {}):
+            print(f"  Error fetching channel info: {report['channel']['error']}")
+            return report
+        ch = report["channel"]
+        print(f"\n  Channel: {ch['title']}")
+        print(f"  URL:     youtube.com/{ch['custom_url']}")
+        print(f"  Videos:  {ch['video_count']:,}  |  Views: {ch['view_count']:,}  |  Subscribers: {ch['subscriber_count']:,}")
+        print(f"\n  Recent Videos:")
+        for v in report["recent_videos"][:10]:
+            if "error" in v:
+                print(f"    Error: {v['error']}")
+                continue
+            print(f"    - {v['title'][:65]}")
+            print(f"      Views: {v['views']:>8,}  Likes: {v['likes']:>6,}  Comments: {v['comments']:>5,}")
+        print(f"\n  Period Comparison (28 days):")
+        comp = report["period_comparison"]
+        if "error" in comp:
+            print(f"    Error: {comp['error']}")
+        else:
+            for metric, vals in comp.get("comparison", {}).items():
+                arrow = "â–²" if vals['change'] > 0 else ("â–¼" if vals['change'] < 0 else "â€”")
+                print(f"    {metric:25s}: {vals['current']:>10,}  {arrow} {vals['change_percent']:+6.1f}%")
+        print(f"{'='*60}\n")
+        return report
+
+    def run_daily(self, upload=False, privacy="public", language=None, character_enabled=False):
         # Rotate through content fields each day so coverage stays balanced
         # across networks, OS, cloud, AI/ML, DevOps, containers, languages...
         field, label = FIELD_MENU[datetime.now().timetuple().tm_yday % len(FIELD_MENU)]
@@ -698,7 +996,7 @@ class DailyTechWorkflow:
                 topic=topic_key, style="educational", duration=3,
                 upload=upload, privacy=privacy, topic_dict=it.topic_dict,
                 research_query=it.topic_dict["title"],
-                language=language, character_enabled=True,
+                language=language, character_enabled=character_enabled,
                 seo_field=field,
             )
         # Fallback: rotating static topic from the full pool
@@ -724,7 +1022,7 @@ class DailyTechWorkflow:
     def auto_make(
         self, top_n: int = 3, duration: int = 3,
         upload: bool = False, privacy: str = "public",
-        language: Optional[str] = None, character_enabled: bool = True,
+        language: Optional[str] = None, character_enabled: bool = False,
     ) -> dict:
         """
         Auto-pipeline: trending list -> pick best matching topics -> research,
@@ -735,9 +1033,11 @@ class DailyTechWorkflow:
         print(f"{'='*60}")
 
         if not HAS_TRENDING:
-            print("  Trending module unavailable — using static topic pool.")
+            print("  Trending module unavailable â€” using static topic pool.")
             topics = self.topic_generator.get_topic_list()[:top_n]
-            return self.run_batch(topics, duration=duration, upload=upload, language=language)
+            return self.run_batch(topics, duration=duration, upload=upload,
+                                  language=language,
+                                  character_enabled=character_enabled)
 
         # Rotate across fields so auto mode covers different categories.
         day = datetime.now().timetuple().tm_yday
@@ -750,7 +1050,7 @@ class DailyTechWorkflow:
             if not items:
                 items = _pick_trending_item(self, field)
             if not items:
-                print("  No topics for this field — skipping.")
+                print("  No topics for this field â€” skipping.")
                 continue
             it = items[0]
             slug = re.sub(r"[^a-z0-9]+", "_", it.topic_dict["title"].lower()).strip("_")[:60]
@@ -759,7 +1059,7 @@ class DailyTechWorkflow:
                 topic=slug, style="educational", duration=duration,
                 upload=upload, privacy=privacy,
                 topic_dict=it.topic_dict, research_query=it.topic_dict["title"],
-                language=language, character_enabled=True,
+                language=language, character_enabled=character_enabled,
                 seo_field=field,
             )
             results[it.topic_dict["title"]] = res
@@ -772,7 +1072,7 @@ class DailyTechWorkflow:
         return results
 
     def run_batch(self, topics: List[str], duration: int = 3, upload: bool = False,
-                  language: Optional[str] = None, character_enabled: bool = True):
+                  language: Optional[str] = None, character_enabled: bool = False):
         results = []
         print(f"\n  BATCH MODE: Creating {len(topics)} videos")
         print(f"{'='*60}")
@@ -810,25 +1110,31 @@ def interactive_mode():
     while True:
         print("\nMAIN MENU:")
         print("  1. Create Single Video")
-        print("  2. Create Daily Video (Auto Topic)")
-        print("  3. Batch Create Multiple Videos")
-        print("  4. List Trending Topics")
-        print("  5. Setup YouTube API")
-        print("  6. Exit")
+        print("  2. Create Video From Prompt (free-form)")
+        print("  3. Create Daily Video (Auto Topic)")
+        print("  4. Batch Create Multiple Videos")
+        print("  5. List Trending Topics")
+        print("  6. Channel Info & Performance")
+        print("  7. Setup YouTube API")
+        print("  8. Exit")
 
-        choice = input("\nSelect option (1-6): ").strip()
+        choice = input("\nSelect option (1-8): ").strip()
 
         if choice == "1":
             _create_single_video(workflow)
         elif choice == "2":
-            _create_daily_video(workflow)
+            _create_prompt_video(workflow)
         elif choice == "3":
-            _batch_create(workflow)
+            _create_daily_video(workflow)
         elif choice == "4":
-            _list_topics(workflow)
+            _batch_create(workflow)
         elif choice == "5":
-            os.system("py upload.py setup")
+            _list_topics(workflow)
         elif choice == "6":
+            _show_channel_analytics(workflow)
+        elif choice == "7":
+            os.system("py upload.py setup")
+        elif choice == "8":
             print("\nGoodbye!")
             break
         else:
@@ -837,14 +1143,18 @@ def interactive_mode():
 
 def _pick_trending_item(workflow, field: str, top_n: int = 10):
     """Fetch trending for a field; fall back to a generated title if empty."""
-    items = workflow.fetch_trending(top_n=top_n, field=field)
+    items = workflow.fetch_trending(top_n=top_n, field=field, field_strict=True)
     if items:
         return items
 
     label = dict(FIELD_MENU).get(field, "General")
-    print(f"\n  No trending matches in '{label}' right now — using a curated topic instead.")
+    print(f"\n  No trending matches in '{label}' right now â€” using a curated topic instead.")
     fallback_titles = FIELD_FALLBACKS.get(field, FIELD_FALLBACKS["news"])
-    title = fallback_titles[0]
+    # Rotate the fallback so the user doesn't see the identical curated topic
+    # on every run when no live trending match exists.
+    import random
+    random.seed(int(time.time()))
+    title = random.choice(fallback_titles)
     from youtube_trending import TrendingTopic
     return [TrendingTopic(title=title, source="fallback", score=1,
                           topic_dict=build_topic_dict(title))]
@@ -912,15 +1222,54 @@ def _create_single_video(workflow):
         privacy = {"1": "public", "2": "unlisted", "3": "private"}.get(
             input("Privacy (1-3): ").strip(), "public"
         )
-    print("\nCharacter on screen? 1=Yes (default)  2=No")
+    print("\nCharacter on screen? 1=Yes  2=No (default)")
     char_opt = input("Character (1-2): ").strip()
-    char_enabled = char_opt != "2"
-    workflow.create_video(
-        topic=topic_key, style=style, duration=duration, upload=upload,
-        privacy=privacy, language=lang, character_enabled=char_enabled,
-        topic_dict=item.topic_dict if item else None,
-        research_query=item.topic_dict["title"] if item else None,
-        seo_field=field if "field" in dir() else "",
+    char_enabled = char_opt == "1"
+    if item is None:
+        # The user typed a custom topic themselves: that topic IS the
+        # instruction, so drive the learning pipeline. Never swap in a
+        # random trending item for an explicitly typed topic.
+        prompt_text = " ".join(topic_key.replace("_", " ").split())
+        print("\n  Custom topic -> prompt pipeline (no trending swap).")
+        workflow.create_video_from_prompt(
+            prompt=prompt_text, duration=duration, upload=upload,
+            privacy=privacy, language=lang, character_enabled=char_enabled,
+        )
+    else:
+        workflow.create_video(
+            topic=topic_key, style=style, duration=duration, upload=upload,
+            privacy=privacy, language=lang, character_enabled=char_enabled,
+            topic_dict=item.topic_dict,
+            research_query=item.topic_dict["title"],
+            seo_field=field if "field" in dir() else "",
+        )
+
+
+def _create_prompt_video(workflow):
+    print("\n" + "=" * 60)
+    print("CREATE VIDEO FROM PROMPT")
+    print("Type what the video should teach, in plain words.")
+    print("=" * 60)
+    prompt = input("\nYour question / topic:\n> ").strip()
+    if not prompt:
+        print("  No prompt entered.")
+        return
+    print("\nDuration: 1=1min  2=3min  3=5min")
+    duration = {"1": 1, "2": 3, "3": 5}.get(input("Duration (1-3): ").strip(), 3)
+    print("\nLanguage: 1=English  2=Hindi  3=Nepali")
+    lang = {"1": "en", "2": "hi", "3": "ne"}.get(
+        input("Language (1-3): ").strip(), "en"
+    )
+    upload = input("\nUpload to YouTube? (y/n): ").strip().lower() == "y"
+    privacy = "public"
+    if upload:
+        print("Privacy: 1=Public  2=Unlisted  3=Private")
+        privacy = {"1": "public", "2": "unlisted", "3": "private"}.get(
+            input("Privacy (1-3): ").strip(), "public"
+        )
+    workflow.create_video_from_prompt(
+        prompt=prompt, duration=duration, upload=upload,
+        privacy=privacy, language=lang,
     )
 
 
@@ -932,9 +1281,9 @@ def _create_daily_video(workflow):
         privacy = {"1": "public", "2": "unlisted", "3": "private"}.get(
             input("Privacy (1-3): ").strip(), "public"
         )
-    print("\nCharacter on screen? 1=Yes (default)  2=No")
+    print("\nCharacter on screen? 1=Yes  2=No (default)")
     char_opt = input("Character (1-2): ").strip()
-    char_enabled = char_opt != "2"
+    char_enabled = char_opt == "1"
     workflow.run_daily(upload=upload, privacy=privacy, character_enabled=char_enabled)
 
 
@@ -954,7 +1303,7 @@ def _batch_create(workflow):
         # Live trending topics (Data API when a key is set, else RSS).
         items = workflow.fetch_trending(top_n=8)
         if not items:
-            print("  No trending topics right now — aborting batch.")
+            print("  No trending topics right now â€” aborting batch.")
             return
         topics = [it.topic_dict["title"] for it in items]
         print(f"\n  Using {len(topics)} live trending topics.")
@@ -969,7 +1318,7 @@ def _batch_create(workflow):
 
     print(f"\nDuration: 1=1min  2=3min  3=5min")
     duration = {"1": 1, "2": 3, "3": 5}.get(input("Duration (1-3): ").strip(), 3)
-    workflow.run_batch(topics=topics, duration=duration, character_enabled=True)
+    workflow.run_batch(topics=topics, duration=duration, character_enabled=False)
 
 
 def _list_topics(workflow):
@@ -994,10 +1343,45 @@ def _list_topics(workflow):
                 for it in shown[:4]:
                     print(f"   - {it.title[:95]}")
             else:
-                print("   (no live match now — curated topics cover this field)")
+                print("   (no live match now â€” curated topics cover this field)")
     print(f"\n{'='*60}")
     print(f"Live pool: {len(pool)} trending topics | Fields: {len(FIELD_MENU)}")
     print(f"{'='*60}")
+
+
+def _show_channel_analytics(workflow):
+    """Submenu for channel analytics: info, recent videos, comparison, CSV export."""
+    while True:
+        print("\n" + "=" * 60)
+        print("  CHANNEL ANALYTICS")
+        print("=" * 60)
+        print("  1. Channel Info (title, subs, views, video count)")
+        print("  2. Recent Uploads (views, likes, comments)")
+        print("  3. Performance Comparison (current vs previous period)")
+        print("  4. Full Performance Report")
+        print("  5. Export to CSV")
+        print("  6. Back to Main Menu")
+        print("=" * 60)
+
+        choice = input("\nSelect (1-6): ").strip()
+
+        if choice == "1":
+            workflow.show_channel_info()
+        elif choice == "2":
+            n = input("Number of recent uploads (default 10): ").strip()
+            workflow.show_recent_videos(max_results=int(n) if n.isdigit() else 10)
+        elif choice == "3":
+            d = input("Days for comparison (default 28): ").strip()
+            workflow.show_performance_comparison(days=int(d) if d.isdigit() else 28)
+        elif choice == "4":
+            workflow.show_full_performance_report()
+        elif choice == "5":
+            n = input("Number of videos to export (default 20): ").strip()
+            workflow.export_channel_performance(max_videos=int(n) if n.isdigit() else 20)
+        elif choice == "6":
+            break
+        else:
+            print("Invalid option.")
 
 
 if __name__ == "__main__":
@@ -1016,27 +1400,29 @@ if __name__ == "__main__":
         """Return True when --no-char was passed on the command line."""
         return "--no-char" in argv
 
+    def arg_char(argv):
+        """Character is opt-in: only shown when --char is passed explicitly."""
+        return "--char" in argv and not arg_no_char(argv)
+
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
 
         if cmd == "daily":
             workflow = DailyTechWorkflow()
             upload = "--upload" in sys.argv
-            no_char = arg_no_char(sys.argv)
             workflow.run_daily(upload=upload, language=arg_lang(sys.argv),
-                               character_enabled=not no_char)
+                               character_enabled=arg_char(sys.argv))
 
         elif cmd == "topic":
             topic = sys.argv[2] if len(sys.argv) > 2 else "ai_basics"
             raw_dur = int(sys.argv[3]) if len(sys.argv) > 3 else 3
             duration = max(1, min(5, round(raw_dur / 60))) if raw_dur > 10 else raw_dur
             upload = "--upload" in sys.argv
-            no_char = arg_no_char(sys.argv)
             preview = "--preview" in sys.argv or "--fast" in sys.argv
             workflow = DailyTechWorkflow()
             workflow.create_video(topic=topic, duration=duration, upload=upload,
                                   language=arg_lang(sys.argv),
-                                  character_enabled=not no_char, preview=preview)
+                                  character_enabled=arg_char(sys.argv), preview=preview)
 
         elif cmd == "batch":
             cat = sys.argv[2] if len(sys.argv) > 2 else "ai"
@@ -1050,15 +1436,34 @@ if __name__ == "__main__":
             else:
                 topics = list(gen.ALL_TOPICS.keys())
             if not topics:
-                print("  No topics for this category — aborting batch.")
+                print("  No topics for this category â€” aborting batch.")
             else:
-                no_char = arg_no_char(sys.argv)
                 workflow.run_batch(topics, language=arg_lang(sys.argv),
-                                   character_enabled=not no_char)
+                                   character_enabled=arg_char(sys.argv))
 
         elif cmd == "topics":
             workflow = DailyTechWorkflow()
             _list_topics(workflow)
+
+        elif cmd == "analytics":
+            workflow = DailyTechWorkflow()
+            subcmd = sys.argv[2] if len(sys.argv) > 2 else "report"
+            if subcmd == "info":
+                workflow.show_channel_info()
+            elif subcmd == "videos":
+                n = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 10
+                workflow.show_recent_videos(max_results=n)
+            elif subcmd == "compare":
+                d = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 28
+                workflow.show_performance_comparison(days=d)
+            elif subcmd == "csv":
+                n = int(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3].isdigit() else 20
+                workflow.export_channel_performance(max_videos=n)
+            elif subcmd == "report" or subcmd == "full":
+                workflow.show_full_performance_report()
+            else:
+                print(f"  Unknown analytics subcommand: {subcmd}")
+                print("  Usage: py workflow.py analytics [info|videos|compare|csv|report]")
 
         elif cmd == "trending":
             workflow = DailyTechWorkflow()
@@ -1068,26 +1473,68 @@ if __name__ == "__main__":
             else:
                 workflow.discover_trending(top_n=12, field=field)
 
+        elif cmd == "prompt":
+            if len(sys.argv) < 3:
+                print("Usage: py workflow.py prompt \"<your full question>\" [--minutes 3] [--lang en|hi|ne] [--upload] [--preview] [--char]")
+            else:
+                tokens, minutes, lang_arg = [], 3, None
+                upload = preview = False
+                args = list(sys.argv[2:])
+                i = 0
+                while i < len(args):
+                    a = args[i]
+                    if a == "--upload":
+                        upload = True
+                    elif a in ("--no-char",):   # compatibility: characters are off by default
+                        pass
+                    elif a in ("--preview", "--fast"):
+                        preview = True
+                    elif a in ("--minutes", "--lang") and i + 1 < len(args):
+                        val = args[i + 1]
+                        if a == "--minutes":
+                            minutes = int(val) if val.lstrip("-").isdigit() else 3
+                        else:
+                            lang_arg = val
+                        i += 1
+                    elif a.startswith("--"):
+                        pass
+                    else:
+                        tokens.append(a)
+                    i += 1
+                prompt_text = " ".join(tokens).strip().strip('"').strip("'")
+                if not prompt_text:
+                    print("  No prompt given â€” usage:")
+                    print('  py workflow.py prompt "how to configure IIS" [--minutes 3]')
+                else:
+                    workflow = DailyTechWorkflow()
+                    workflow.create_video_from_prompt(
+                        prompt=prompt_text, duration=minutes, upload=upload,
+                        language=lang_arg, character_enabled=arg_char(sys.argv),
+                        preview=preview,
+                    )
+
         elif cmd == "auto":
             workflow = DailyTechWorkflow()
             top_n = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 3
             raw_dur = int(sys.argv[3]) if len(sys.argv) > 3 else 1
             duration = max(1, min(5, round(raw_dur / 60))) if raw_dur > 10 else raw_dur
             upload = "--upload" in sys.argv
-            no_char = arg_no_char(sys.argv)
             workflow.auto_make(top_n=top_n, duration=duration, upload=upload,
                                language=arg_lang(sys.argv),
-                               character_enabled=not no_char)
+                               character_enabled=arg_char(sys.argv))
 
         else:
             print("Usage:")
             print("  py workflow.py daily [--upload] [--lang en|hi|ne]")
+            print("  py workflow.py prompt \"<question>\" [--minutes 3] [--upload] [--lang en|hi|ne] [--preview]   # prompt-driven education video")
             print("  py workflow.py topic <topic_name> [duration_seconds] [--upload] [--lang en|hi|ne]")
             print("  py workflow.py batch <category> [--lang en|hi|ne]")
             print("  py workflow.py topics")
             print("  py workflow.py trending                # list trending topics + suggestions")
             print("  py workflow.py auto [count] [minutes] [--upload] [--lang en|hi|ne]   # auto-generate from trending")
+            print("  py workflow.py analytics [info|videos|compare|csv|report]   # channel analytics")
             print("  Duration: seconds (60-300) or minutes (1-5)")
             print("  Language: en (English) | hi (Hindi) | ne (Nepali)")
+            print("  Characters are OFF by default — add --char to enable.")
     else:
         interactive_mode()

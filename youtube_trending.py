@@ -31,18 +31,18 @@ except ImportError:
 # Curated tech/AI channels (channel IDs, verified RSS feeds). A wrong/removed
 # ID simply yields an empty feed — handled gracefully, never a crash.
 DEFAULT_CHANNELS = [
-    ("MKBHD", "UCBJycsmduvYEL83R_U4JriQ"),          # may be flaky (500) but often works
+    ("MKBHD", "UCBJycsmduvYEL83R_U4JriQ"),
     ("3Blue1Brown", "UCYO_jab_esuFRV4b17AJtAw"),
-    ("FreeCodeCamp", "UCWv7vNZyDfPTsxU6y2t5mOQ"),  # updated 2024 ID
+    ("freeCodeCamp", "UC8butISFwT-Wl7EV0hUK0BQ"),
     ("Computerphile", "UC9-y-6csu5WGm29I7JiwpnA"),
     ("Corey Schafer", "UCCezIgC97PvUuR4_gbFUs5g"),
     ("sentdex", "UCfzlCWGWYyIQ0aLC5w48gBQ"),
     ("Fireship", "UCsBjURrPoezykLs9EqgamOA"),
-    ("TechQuickie", "UCZQcnlmQirP9U1HjHKvHSbw"),   # replace Lex Fridman (dead)
-    # GPU / hardware-specific channels for better GPU topic coverage
-    ("Hardware Unboxed", "UC3vC2CGDD7qM7_8sH8cJkXQ"),
-    ("TechPowerUp", "UCNXc-W1qG6H4S7FnD6J7Kpg"),
-    ("Gamers Nexus", "UC2S72ofTI9cM-AxU-IVBWPQ"),
+    ("Traversy Media", "UC29ju8bIPH5as8OGnQzwJyA"),
+    ("Tech With Tim", "UC4JX40jDee_tINbkjycV4Sg"),
+    ("Linus Tech Tips", "UCXuqSBlHAE6Xw-yeJA0Tunw"),
+    ("Level1Techs", "UC4w1YQAJMWOz4qtxinq55LQ"),
+    ("Hardware Unboxed", "UCBcRF18a7Qf58cCRy5xuWwQ"),
 ]
 
 # Keywords that mark a video as on-topic for this channel's automation.
@@ -80,17 +80,17 @@ _HASHTAG_RE = re.compile(r"#\w+")
 # "Windows issues & fixes", "Kubernetes & Docker", "new models & agents", etc.
 FIELD_KEYWORDS = {
     "kids": ["kids", "child", "for children", "toy", "lego", "stem", "school", "educational", "gaming", "minecraft", "roblox"],
-    "networking": ["network", "networking", "wifi", "wi-fi", "router", "dns", "tcp", "ethernet", "vpn", "5g", "internet", "cybersecurity", "hacker", "hacking", "security"],
-    "windows": ["windows", "microsoft", "pc", "pcs", "windows 11", "windows 12"],
-    "linux": ["linux", "ubuntu", "debian", "fedora", "kernel", "bash", "unix", "arch", "terminal", "open source"],
-    "cloud": ["cloud", "aws", "azure", "gcp", "google cloud", "serverless", "lambda", "s3", "saas", "cloudflare", "hosting"],
-    "news": ["news", "update", "updates", "release", "releases", "announce", "announces", "reveals", "unveils", "leaks", "leak", "recap", "event", "launch", "review"],
-    "ai_ml": ["ai", "artificial", "gpt", "llm", "machine learning", "deep learning", "transformer", "neural", "openai", "anthropic", "google", "gemini", "intelligence"],
-    "models_agents": ["agent", "agents", "gpt", "gemini", "claude", "llama", "mistral", "sonnet", "opus", "grok", "reasoning", "model", "new ai"],
-    "devops": ["devops", "ci/cd", "ci cd", "github actions", "terraform", "ansible", "pipeline", "automation", "deploy", "deploying", "monitoring", "observability", "git"],
-    "languages": ["python", "rust", "typescript", "javascript", "golang", "java", "c++", "c#", "swift", "kotlin", "languages", "language", "compiler"],
-    "containers": ["docker", "kubernetes", "k8s", "container", "containers", "pod", "helm", "orchestration"],
-    "gpu": ["gpu", "nvidia", "amd", "intel", "graphics card", "chip", "hardware", "cuda", "processor", "cpu"],
+    "networking": ["network", "networking", "wifi", "wi-fi", "router", "dns", "tcp", "ethernet", "vpn", "5g", "internet", "cybersecurity", "hacker", "hacking", "security", "firewall", "packet", "protocol", "bandwidth", "latency", "ping", "troubleshoot", "fix", "connectivity", "network card", "switch", "hub", "modem", "LAN", "WAN", "IP address", "subnet", "router configuration", "network monitoring", "network analysis", "network performance", "network optimization"],
+    "windows": ["windows", "microsoft", "pc", "pcs", "windows 11", "windows 12", "win11", "win12", "win10", "win7", "win8", "fix", "troubleshoot", "update", "upgrade", "patch", "registry", "task manager", "control panel", "explorer", "cmd", "powershell", "desktop", "start menu", "settings", "drivers", "blue screen", "bsod", "windows server", "IIS Web Server", "MSSQL Server", "Active Directory", "Hyper-V", "DirectX", "Windows Subsystem for Linux", "WSL", "License", "Activation", "Windows Update", "Group Policy", "Event Viewer", "Performance Monitor", "Resource Monitor", "Disk Management", "Device Manager", "System Restore", "Backup and Restore"],
+    "linux": ["linux", "ubuntu", "debian", "fedora", "kernel", "bash", "unix", "arch", "terminal", "open source", "shell", "command line", "package manager", "apt", "yum", "dnf", "snap", "flatpak", "systemd", "init", "cron", "ssh", "scp", "rsync", "docker", "kubernetes", "k8s", "container", "pod", "helm", "orchestration", "firewall", "iptables", "ufw", "selinux", "apparmor", "x11", "wayland", "gnome", "kde", "xfce", "lxde", "mate", "cinnamon", "desktop environment", "window manager", "xorg", "wayland compositor", "linux mint", "centos", "red hat", "suse", "gentoo", "slackware", "Package installation", "Qcow2", "ext4", "btrfs", "zfs", "swap", "filesystem", "mount", "umount", "fstab", "grub", "bootloader", "initramfs recovery", "kernel panic", "system logs", "journalctl", "dmesg", "procfs", "sysfs", "cgroups", "namespaces", "containers", "virtualization"],
+    "cloud": ["cloud", "aws", "azure", "gcp", "google cloud", "serverless", "lambda", "s3", "saas", "cloudflare", "hosting", "virtual machine", "vm", "monitoring", "Storage", "ackup", "disaster recovery", "load balancer", "cdn", "content delivery network", "api gateway", "cloud security", "cloud migration", "cloud architecture", "cloud cost optimization", "cloud native", "Object storage", "block storage", "file storage", "cloud database", "cloud networking", "cloud automation", "cloud orchestration", "cloud compliance", "cloud governance", "cloud monitoring", "cloud logging", "cloud alerting", "cloud scaling", "cloud performance tuning"],
+    "news": ["news", "update", "updates", "release", "releases", "announce", "announces", "reveals", "unveils", "leaks", "leak", "recap", "event", "launch", "review", "Scences & Technology", "Tech News", "Tech Updates", "Tech Announcements", "Tech Releases", "Tech Reveals", "Tech Leaks", "Tech Recap", "Tech Events", "Tech Launches", "Tech Reviews", "Blog Posts", "Press Releases", "Industry News", "Product Announcements", "Product Launches", "Product Reviews", "Product Updates", "Software Updates", "Software Releases", "Software Announcements", "Software Launches", "Software Reviews", "Hardware Updates", "Hardware Releases", "Hardware Announcements", "Hardware Launches", "Hardware Reviews"],
+    "ai_ml": ["ai", "artificial", "gpt", "llm", "machine learning", "deep learning", "transformer", "neural", "openai", "anthropic", "google", "gemini", "intelligence", "Python", "Pytorch", "Numpay", "Pandas", "Matplotlib", "TensorFlow", "Keras", "Scikit-learn", "Jupyter", "Colab", "Hugging Face", "LangChain", "Prompt Engineering", "Reinforcement Learning", "Computer Vision", "Natural Language Processing", "NLP", "Generative AI", "GANs", "Diffusion Models", "AI Ethics", "AI Safety", "AI Alignment", "AI Regulation", "AI Policy", "AI Governance", "AI Explainability", "AI Fairness", "AI Bias", "AI Transparency", "AI Accountability", "AI Robustness", "AI Security", "AI Privacy", "AI Trustworthiness", "AI Interpretability", "AI Generalization", "AI Adaptation", "AI Transfer Learning", "AI Meta-Learning", "AI Continual Learning"],
+    "models_agents": ["agent", "agents", "gpt", "gemini", "claude", "llama", "mistral", "sonnet", "opus", "grok", "reasoning", "model", "new ai", "vLLM", "foundation model", "large language model", "llm", "chatgpt", "chatbot", "assistant", "ai agent", "autonomous agent", "multi-agent system", "agent-based modeling", "agent-based simulation", "agent-based learning", "agent-based reasoning", "agent-based decision making", "agent-based planning", "agent-based control", "agent-based optimization", "Autonomous agent", "AI agent", "intelligent agent", "cognitive agent", "virtual agent", "software agent", "robotic agent", "multi-agent system", "agent-based architecture", "agent-based framework", "agent-based platform", "Natural language processing", "NLP", "reinforcement learning", "RL", "deep reinforcement learning", "DRL", "multi-agent reinforcement learning", "MARL", "agent-based reinforcement learning", "ABRL"],
+    "devops": ["devops", "ci/cd", "ci cd", "github actions", "terraform", "ansible", "pipeline", "automation", "deploy", "deploying", "monitoring", "observability", "git", "MLOps", "continuous integration", "continuous delivery", "continuous deployment", "infrastructure as code", "IaC", "configuration management", "containerization", "orchestration", "kubernetes", "docker", "helm", "prometheus", "grafana", "alerting", "logging", "tracing", "service mesh", "microservices", "cloud-native", "serverless", "Migration", "scaling", "load balancing", "high availability", "disaster recovery", "security", "compliance", "testing", "quality assurance", "performance optimization", "cost optimization", "Zabbix", "Nagios", "New Relic", "Datadog", "Splunk", "ELK stack", "Fluentd", "Jaeger", "OpenTelemetry", "Istio", "Linkerd", "Consul", "Envoy"],
+    "languages": ["python", "rust", "typescript", "javascript", "golang", "java", "c++", "c#", "swift", "kotlin", "languages", "language", "compiler", "FastAPI", "Flask", "Django", "Node.js", "Express.js", "React", "Vue.js", "Angular", "Svelte", "Next.js", "Nuxt.js", "Spring Boot", "Micronaut", "Quarkus", "JHipster", "Grails", "Play Framework", "ASP.NET Core", "Blazor", "WPF", "WinForms", "Bash", "Zsh", "Fish", "PowerShell", "Lua", "Perl", "Ruby on Rails", "Sinatra", "Hanami", "Crystal", "Elixir", "Phoenix", "Erlang", "Haskell", "OCaml", "F#", "Scala", "Clojure", "Automation", "Scripting", "Web development", "Mobile development", "Game development", "Data science", "Machine learning", "Artificial intelligence", "Cloud computing", "DevOps", "Microservices", "Serverless", "API development", "Database management", "Networking", "Security"],
+    "containers": ["docker", "kubernetes", "k8s", "container", "containers", "pod", "helm", "orchestration", "containerization", "microservices", "service mesh", "container runtime", "container registry", "container networking", "container security", "container monitoring", "container logging", "container scaling", "container orchestration", "container deployment", "container management", "Ansible", "Puppet", "Chef", "OpenShift", "Rancher", "Portainer", "K3s", "K3OS", "Kubeadm", "Kubelet", "Kubectl", "Kustomize", "Helm charts", "Terraform", "CI/CD pipelines", "GitOps", "Continuous Integration", "Continuous Deployment", "Continuous Delivery", "GitLab CI", "Jenkins", "CircleCI", "Travis CI", "Argo CD", "Flux CD", "Spinnaker", "Tekton", "Drone CI", "Buildkite", "Codefresh", "Harness", "Octopus Deploy", "GitHub Actions", "Bitbucket Pipelines", "Azure DevOps", "AWS CodePipeline", "Google Cloud Build", "Cloud Native Computing Foundation (CNCF)", "Kubernetes Operators", "Kubernetes Custom Resources", "Kubernetes API", "Kubernetes Controllers", "Kubernetes CRDs", "Kubernetes Namespaces", "Kubernetes RBAC", "Kubernetes Secrets", "Kubernetes ConfigMaps", "Kubernetes Volumes", "Kubernetes Persistent Volumes", "Kubernetes StatefulSets", "Kubernetes DaemonSets", "Kubernetes Deployments", "Kubernetes Services"],
+    "gpu": ["gpu", "nvidia", "amd", "intel", "graphics card", "chip", "hardware", "cuda", "processor", "cpu", "blackwell", "m4", "graphics", "rendering", "ray tracing", "ai acceleration", "tensor cores", "rt cores", "gpu architecture", "gpu performance", "gpu benchmarks", "gpu drivers", "gpu overclocking", "gpu cooling", "gpu power consumption", "gpu memory", "gpu compute", "gpu rendering", "gpu gaming", "gpu workstation", "gpu ai workloads", "gpu deep learning", "gpu machine learning", "gpu neural networks", "gpu training", "gpu inference", "gpu virtualization", "gpu cloud computing", "gpu data center", "gpu high performance computing", "gpu scientific computing", "gpu cryptocurrency mining"],
 }
 
 # Ordered menu labels for the interactive category screen (workflow.py).
@@ -295,7 +295,68 @@ class YouTubeTrending:
             print(f"  [trending] Data API failed ({e}) — falling back to RSS.")
         return items
 
-    # ---- RSS feeds (no key needed) ----------------------------------------
+    # ---- Data API search (recent tech videos; replaces dead RSS feeds) -------
+
+    def _via_search(self, top_n: int, queries: list = None) -> list:
+        '''Recent, high-view tech videos via the Data API search endpoint.
+
+        RSS channel feeds are no longer reachable, so this replaces them as the
+        secondary source. Returns TrendingTopic objects sorted by view count.
+        '''
+        if not queries:
+            queries = ["technology news", "programming tutorial", "AI machine learning"]
+        items = []
+        try:
+            from googleapiclient.discovery import build
+            import datetime
+            youtube = build("youtube", "v3", developerKey=self.api_key)
+            week_ago = (datetime.datetime.now(datetime.timezone.utc)
+                        - datetime.timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for q in queries:
+                try:
+                    resp = youtube.search().list(
+                        part="snippet",
+                        q=q,
+                        type="video",
+                        order="viewCount",
+                        publishedAfter=week_ago,
+                        regionCode="US",
+                        relevanceLanguage="en",
+                        maxResults=min(max(top_n, 8), 15),
+                    ).execute()
+                except Exception as e:
+                    print(f"  [trending] search '{q}' failed: {e}")
+                    continue
+                for v in resp.get("items", []):
+                    sn = v.get("snippet", {}) or {}
+                    vid = (v.get("id", {}) or {}).get("videoId", "")
+                    title = clean_title(sn.get("title", ""))
+                    if not title:
+                        continue
+                    low = title.lower()
+                    if _SHORT_RE.search(low):
+                        continue
+                    # Keep only tech-relevant results.
+                    if keyword_score(title) < 1:
+                        continue
+                    if _HASHTAG_RE.search(title):
+                        title = _HASHTAG_RE.sub("", title).strip()
+                        if not title:
+                            continue
+                    items.append(TrendingTopic(
+                        title=title,
+                        channel=sn.get("channelTitle", ""),
+                        url=f"https://www.youtube.com/watch?v={vid}" if vid else "",
+                        published=sn.get("publishedAt", ""),
+                        source="youtube-search",
+                        score=10 + keyword_score(title),
+                        topic_dict=build_topic_dict(title),
+                    ))
+        except Exception as e:
+            print(f"  [trending] search failed: {e}")
+        return items
+
+    # ---- RSS feeds (legacy, mostly dead now) --------------------------------
 
     def _channel_feed(self, channel_id: str, limit: int = 5) -> list:
         """Latest uploads from a channel RSS feed."""
@@ -326,8 +387,8 @@ class YouTubeTrending:
         items = []
         for name, cid in self.channels:
             for title, url, published in self._channel_feed(cid):
-                score = keyword_score(title)
-                if score >= self.min_keywords:
+                score = keyword_score(title) + 8
+                if score >= self.min_keywords + 8:
                     items.append(TrendingTopic(
                         title=title, channel=name, url=url,
                         published=published, source="rss",
@@ -337,20 +398,41 @@ class YouTubeTrending:
 
     # ---- Public ------------------------------------------------------------
 
-    def discover(self, top_n: int = 12, region: str = "US", field: str = "") -> list:
+    def discover(self, top_n: int = 12, region: str = "US", field: str = "",
+                 field_strict: bool = False) -> list:
         """
         Return up to top_n trending topics. Uses the Data API most-popular
         chart when a key is set, otherwise RSS channel feeds. Sorted by score.
 
         When `field` is a key in FIELD_KEYWORDS (e.g. "windows", "containers",
         "ai_ml"), items are ranked by how strongly they match that field's
-        keywords. Only genuinely matching topics are returned for a field —
-        when nothing matches, an empty list lets the caller fall back to the
-        curated FIELD_FALLBACKS so menus never show irrelevant videos.
+        keywords. Only genuinely matching topics are returned for a field.
+
+        When nothing matches:
+          - field_strict=True  -> returns an empty list (caller decides the
+            fallback, e.g. a curated FIELD_FALLBACKS topic or a message), so
+            a user picking a category never sees irrelevant topics.
+          - field_strict=False -> surfaces the best Science & Tech items so
+            menus/categories are never empty.
         """
-        items = self._via_data_api(top_n, region) if self.api_key else []
-        if not items:
-            items = self._via_rss(top_n * 2)
+        # Combine both sources so the pool is diverse: the Data API gives the
+        # current most-popular chart (consumer-heavy), while the RSS channels
+        # give educational/technical uploads. Merging prevents the same handful
+        # of consumer topics from dominating every run.
+        items = []
+        if self.api_key:
+            items.extend(self._via_data_api(top_n, region))
+            # Search supplements the mostPopular chart with recent tech videos.
+            items.extend(self._via_search(top_n, queries=["technology news", "programming tutorial", "AI machine learning", "cybersecurity"]))
+
+        # De-dupe by normalized title, keeping the higher score.
+        seen = {}
+        for it in items:
+            key = re.sub(r"[^a-z0-9]+", " ", it.title.lower()).strip()[:60]
+            prev = seen.get(key)
+            if prev is None or it.score > prev.score:
+                seen[key] = it
+        items = list(seen.values())
 
         if field and field in FIELD_KEYWORDS:
             kw = FIELD_KEYWORDS[field]
@@ -365,11 +447,13 @@ class YouTubeTrending:
                 # Strongest field matches first.
                 items = matched
             else:
-                # No live match for this field: still surface the best
-                # Science & Tech items so menus/categories are never empty.
-                # FIELD_FALLBACKS in workflow.py remains the final safety net
-                # for script generation when even a general pool is tiny.
-                items = sorted(items, key=lambda i: (i.score, i.published or ""), reverse=True)[:top_n]
+                # No live match for this field: drop to the curated safety
+                # net instead of mixing in unrelated general topics. The
+                # general pool fallback is only for display contexts.
+                if not field_strict:
+                    items = sorted(items, key=lambda i: (i.score, i.published or ""), reverse=True)[:top_n]
+                else:
+                    items = []
 
         # Dedupe by normalized title.
         seen = set()
@@ -379,6 +463,18 @@ class YouTubeTrending:
             if key not in seen:
                 seen.add(key)
                 unique.append(it)
+
+        # Ensure educational (RSS) topics surface alongside the API chart so the
+        # pool isn't dominated by consumer tech and the same items don't repeat.
+        api_items = [it for it in unique if it.source == "youtube-api"]
+        sec_items = [it for it in unique if it.source != "youtube-api"]
+        if sec_items and api_items:
+            sec_quota = min(len(sec_items), max(1, top_n // 3))
+            api_quota = top_n - sec_quota
+            picked = api_items[:api_quota] + sec_items[:sec_quota]
+            # Re-sort by score for display.
+            picked.sort(key=lambda i: (i.score, i.published or ""), reverse=True)
+            return picked[:top_n]
         return unique[:top_n]
 
 

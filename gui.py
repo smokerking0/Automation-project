@@ -31,7 +31,7 @@ def _load_dotenv(path: str = ".env"):
 _load_dotenv()
 
 from video import CinematicVideoGenerator, VideoConfig, Scene
-from topics import TechTopicGenerator, VideoScript
+from topics import TechTopicGenerator
 from upload import YouTubeUploader, ThumbnailGenerator
 
 try:
@@ -45,6 +45,12 @@ try:
     HAS_GROWTH = True
 except ImportError:
     HAS_GROWTH = False
+
+try:
+    import learning  # noqa: F401  (workflow.py routes through this directly)
+    HAS_LEARNING = True
+except ImportError:
+    HAS_LEARNING = False
 
 try:
     from ollama_gen import OllamaClient
@@ -184,26 +190,10 @@ class VideoApp:
 
         row5 = tk.Frame(main, bg=BG)
         row5.pack(fill="x", pady=4)
-        ttk.Label(row5, text="", width=10).pack(side="left")
-        self.character_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(row5, text="Show presenter character", variable=self.character_var).pack(side="left")
-
-        row5b = tk.Frame(main, bg=BG)
-        row5b.pack(fill="x", pady=4)
-        ttk.Label(row5b, text="Character:", width=10).pack(side="left")
-        self.character_mode_var = tk.StringVar(value="alien")
-        char_menu = ttk.Combobox(
-            row5b, textvariable=self.character_mode_var, width=20, state="readonly",
-            values=["alien", "it_guy"]
-        )
-        char_menu.pack(side="left", padx=5)
-
-        row5c = tk.Frame(main, bg=BG)
-        row5c.pack(fill="x", pady=4)
-        ttk.Label(row5c, text="Visual:", width=10).pack(side="left")
+        ttk.Label(row5, text="Visual:", width=10).pack(side="left")
         self.visual_mode_var = tk.StringVar(value="cinematic_realistic")
         visual_menu = ttk.Combobox(
-            row5c, textvariable=self.visual_mode_var, width=20, state="readonly",
+            row5, textvariable=self.visual_mode_var, width=20, state="readonly",
             values=["cinematic_realistic", "cinematic_tech"]
         )
         visual_menu.pack(side="left", padx=5)
@@ -237,6 +227,9 @@ class VideoApp:
 
         self.trending_btn = ttk.Button(btn_frame, text="Trending Topics", command=self._start_trending)
         self.trending_btn.pack(side="left", padx=(0, 10))
+
+        self.analytics_btn = ttk.Button(btn_frame, text="Channel Analytics", command=self._start_analytics)
+        self.analytics_btn.pack(side="left", padx=(0, 10))
 
         self.browse_btn = ttk.Button(btn_frame, text="Open Output", command=self._open_output)
         self.browse_btn.pack(side="left")
@@ -293,6 +286,19 @@ class VideoApp:
         try:
             from youtube_trending import YouTubeTrending, _resolve_api_key
             items = YouTubeTrending(api_key=_resolve_api_key()).discover(top_n=12)
+            # Skip already-used topics so the quick buttons rotate fresh content.
+            try:
+                import csv, os
+                used = set()
+                if os.path.exists("output/topic_tracker.csv"):
+                    with open("output/topic_tracker.csv", newline="", encoding="utf-8") as f:
+                        for row in csv.DictReader(f):
+                            used.add((row.get("title") or "").strip().lower())
+                if used:
+                    items = [it for it in items
+                             if (it.topic_dict.get("title") or "").strip().lower() not in used] or items
+            except Exception:
+                pass
             if items:
                 titles = [it.topic_dict["title"] for it in items[:6]]
         except Exception as e:
@@ -335,18 +341,18 @@ class VideoApp:
         try:
             topic = self.topic_var.get().strip()
             prompt = self.prompt_text.get("1.0", "end").strip()
-            if not topic and not prompt:
-                self._done("Please enter a topic.")
+            # The prompt is the source of truth; the optional topic line is a
+            # shortcut that is treated as the prompt when no prompt is typed.
+            full_prompt = (prompt if prompt else topic).strip()
+            if not full_prompt:
+                self._done("Please enter a topic or prompt.")
                 return
 
-            topic_source = self._clean_prompt(prompt) if prompt else topic
-            file_slug = re.sub(r"[^a-z0-9]+", "_", topic_source.lower()).strip("_")[:60] or "video"
+            file_slug = re.sub(r"[^a-z0-9]+", "_", full_prompt.lower()).strip("_")[:60] or "video"
             dur_text = self.duration_var.get()
             duration = int(dur_text.split()[0])
             style = self.style_var.get()
             upload = self.upload_var.get()
-            show_char = self.character_var.get()
-            character_mode = self.character_mode_var.get()
             visual_mode = self.visual_mode_var.get()
             text_color = self.color_var.get()
             lang = normalize_lang(self.language_var.get()) if HAS_TRANSLATE else "en"
@@ -356,9 +362,44 @@ class VideoApp:
             for d in ["output/scripts", "output/videos", "output/thumbnails", "output/temp"]:
                 Path(d).mkdir(parents=True, exist_ok=True)
 
+            if HAS_LEARNING:
+                # Prompt-driven pipeline: the complete user input (not a slug)
+                # is analyzed by learning.py, turned into a visual plan, and
+                # rendered as explanatory scenes by visualkit. No character.
+                try:
+                    from workflow import DailyTechWorkflow
+                except Exception:
+                    self._done("Workflow module unavailable — run from project root.")
+                    return
+                try:
+                    workflow = DailyTechWorkflow("config.yaml")
+                except Exception as exc:
+                    self._done(f"Workflow init failed: {exc}")
+                    self.root.after(0, lambda: messagebox.showerror("Error", str(exc)))
+                    return
+                self._update_status("Analyzing prompt & building visual plan...", 5)
+                results = workflow.create_video_from_prompt(
+                    prompt=full_prompt, duration=duration, upload=upload,
+                    language=lang, character_enabled=False, preview=False,
+                )
+                if results.get("error"):
+                    self._done(f"Error: {results['error']}")
+                    self.root.after(0, lambda: messagebox.showerror("Error", results["error"]))
+                    return
+                self._update_status("Done!", 100)
+                msg = f"Title: {results.get('title')}\n"
+                msg += f"Video: {results.get('video_path')}\n"
+                msg += f"Thumbnail: {results.get('thumbnail_path')}\n"
+                msg += f"Estimated duration: ~{results.get('estimated_duration', 0) / 60:.1f} min"
+                if results.get("youtube_url"):
+                    msg += f"\nYouTube: {results['youtube_url']}"
+                self.root.after(0, lambda: messagebox.showinfo("Success", msg))
+                return
+
+            # Fallback (learning.py missing): legacy topic template, no character.
             self._update_status("Generating script...", 5)
             script = self.topic_gen.generate_script(
-                topic=topic_source, style=style, target_duration=duration
+                topic=full_prompt, style=style, target_duration=duration
             )
             if HAS_TRANSLATE and lang != "en":
                 self._update_status(f"Translating narration to {lang_name}…", 10)
@@ -367,29 +408,32 @@ class VideoApp:
             self.topic_gen.save_script(script, script_path)
 
             self._update_status(f"Generating video: {script.title}...", 15)
+            learning_cfg = self.cfg.get("learning", {}) or {}
             config = VideoConfig(
                 voice_lang=lang,
                 presenter_avatar_path=((self.cfg.get("presenter", {}) or {}).get("avatar_path", "") or ""),
                 presenter_avatar_data=((self.cfg.get("presenter", {}) or {}).get("avatar_data_uri", "") or ""),
                 stock_background=self.stock_background,
                 background_mode=self.bg_mode_var.get(),
+                character_enabled=False,
                 visualizer_enabled=((self.cfg.get("visualizer", {}) or {}).get("enabled", False)),
                 visualizer_opacity=((self.cfg.get("visualizer", {}) or {}).get("opacity", 0.85)),
                 visualizer_font_size=((self.cfg.get("visualizer", {}) or {}).get("font_size", 24)),
                 visualizer_font_path=((self.cfg.get("visualizer", {}) or {}).get("font_path", "C:/Windows/Fonts/comic.ttf")),
+                visualkit_enabled=bool(learning_cfg.get("enabled", False)
+                                       and learning_cfg.get("rich_visuals", False)),
+                visualkit_font_path=learning_cfg.get("font_path", "C:/Windows/Fonts/comic.ttf"),
             )
             generator = CinematicVideoGenerator(config)
 
             scenes = []
             for s in script.scenes:
                 if isinstance(s, Scene):
-                    s.show_character = show_char
-                    s.character_type = character_mode
+                    s.show_character = False
                     s.visual_style = visual_mode
                     s.text_color = text_color
                     s.overlay_opacity = 0.55
-                    if prompt:
-                        s.background_prompt = prompt
+                    s.background_prompt = full_prompt
                     scenes.append(s)
                 else:
                     scenes.append(Scene(
@@ -401,21 +445,21 @@ class VideoApp:
                         text_position=s.get("text_position", "center"),
                         animation=s.get("animation", "fade"),
                         overlay_opacity=0.55,
-                        show_character=show_char,
-                        character_type=character_mode,
+                        show_character=False,
                         visual_style=visual_mode,
-                        background_prompt=topic_source,
+                        background_prompt=full_prompt,
                     ))
+            scenes = [s for s in scenes if isinstance(s, Scene) and (s.text or "").strip()]
 
             lang_tag = f"_{lang}" if lang != "en" else ""
             video_path = f"output/videos/{file_slug}{lang_tag}_{timestamp}.mp4"
 
-            # Growth boosts — cold-open hook, mid-CTA, recap, scene variation
+            # Growth boosts — cold-open hook, mid-CTA, recap, scene variation.
             if HAS_GROWTH and len(scenes) >= 3:
                 try:
-                    apply_growth(scenes, topic_source, lang, "",
+                    apply_growth(scenes, full_prompt, lang, "",
                                  translate_text if HAS_TRANSLATE else None)
-                    apply_hook(scenes, topic_source, "", lang,
+                    apply_hook(scenes, full_prompt, "", lang,
                                translate_text if HAS_TRANSLATE else None)
                 except Exception as exc:
                     print(f"  [growth] skipped: {exc}")
@@ -523,6 +567,94 @@ class VideoApp:
 
         use_btn = ttk.Button(win, text="Use Selected Idea", command=use_selected)
         use_btn.pack(pady=(0, 10))
+
+    def _start_analytics(self):
+        if self.is_running:
+            return
+        self.is_running = True
+        self.analytics_btn.configure(state="disabled")
+        self._update_status("Loading channel analytics...", 0)
+        thread = threading.Thread(target=self._load_analytics, daemon=True)
+        thread.start()
+
+    def _load_analytics(self):
+        try:
+            from channel_analytics import get_channel_info, get_recent_video_stats, get_period_comparison
+            import io, sys as _sys
+
+            # Capture prints
+            buf = io.StringIO()
+            old_stdout = _sys.stdout
+            _sys.stdout = buf
+
+            print("=" * 50)
+            print("  CHANNEL INFORMATION")
+            print("=" * 50)
+            info = get_channel_info()
+            if "error" in info:
+                print(f"  Error: {info['error']}")
+            else:
+                print(f"  Channel:  {info['title']}")
+                print(f"  URL:      youtube.com/{info['custom_url']}")
+                print(f"  Videos:   {info['video_count']:,}")
+                print(f"  Views:    {info['view_count']:,}")
+                sub = info['subscriber_count']
+                if info.get('hidden_subscriber_count'):
+                    print(f"  Subscribers:  (hidden by YouTube)")
+                else:
+                    print(f"  Subscribers:  {sub:,}")
+                print(f"  Description: {info['description'][:120]}")
+
+            print()
+            print("=" * 50)
+            print("  RECENT UPLOADS (10)")
+            print("=" * 50)
+            videos = get_recent_video_stats(max_results=10)
+            if not videos:
+                print("  No recent uploads found.")
+            for i, v in enumerate(videos, 1):
+                if "error" in v:
+                    print(f"  {i}. Error: {v['error']}")
+                    continue
+                print(f"  {i}. {v['title'][:60]}")
+                print(f"     Views: {v['views']:,}  |  Likes: {v['likes']:,}  |  Comments: {v['comments']:,}")
+
+            print()
+            print("=" * 50)
+            print("  PERFORMANCE COMPARISON (28 days)")
+            print("=" * 50)
+            comp = get_period_comparison(days=28)
+            if "error" in comp:
+                print(f"  Error: {comp['error']}")
+            else:
+                for metric, vals in comp.get("comparison", {}).items():
+                    arrow = "\u25b2" if vals['change'] > 0 else ("\u25bc" if vals['change'] < 0 else "\u2014")
+                    print(f"  {metric:25s}: {vals['current']:>10,}  {arrow} {vals['change_percent']:+6.1f}%")
+
+            print("=" * 50)
+
+            _sys.stdout = old_stdout
+            output = buf.getvalue()
+        except Exception as e:
+            import traceback
+            output = f"Error loading analytics:\n{traceback.format_exc()}"
+
+        self.root.after(0, lambda: self._show_analytics_window(output))
+        self.root.after(0, lambda: self._update_status("Ready.", 0))
+        self.root.after(0, lambda: self.analytics_btn.configure(state="normal"))
+
+    def _show_analytics_window(self, text):
+        win = tk.Toplevel(self.root)
+        win.title("Channel Analytics")
+        win.configure(bg=BG)
+        win.geometry("700x550")
+        text_widget = tk.Text(win, bg="#111827", fg=FG, font=("Consolas", 10),
+                              wrap="word", padx=10, pady=10)
+        text_widget.pack(fill="both", expand=True, padx=10, pady=10)
+        text_widget.insert("1.0", text)
+        text_widget.config(state="disabled")
+        close_btn = ttk.Button(win, text="Close", command=win.destroy)
+        close_btn.pack(pady=(0, 10))
 
     def _update_status(self, text, progress_val):
         self.root.after(0, lambda: self.status_var.set(text))

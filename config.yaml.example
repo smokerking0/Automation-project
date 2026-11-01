@@ -81,9 +81,19 @@ presenter:
 # their background; the scene's own heading/bullets are suppressed because
 # the visual already carries that information.
 visualizer:
-  enabled: false
+  enabled: true
   opacity: 0.85
   font_path: "C:/Windows/Fonts/comic.ttf"
+
+# Prompt-driven pipeline — free-form prompts are the source of truth.
+# learning.py turns the prompt into a workflow (sections/steps) and each
+# step carries a content-based visual_type, rendered by visualkit. Rich
+# visuals appear only when enabled AND rich_visuals are on.
+learning:
+  enabled: true
+  rich_visuals: true
+  font_path: "C:/Windows/Fonts/comic.ttf"
+  max_duration_min: 3
 
 # Ollama Remote LLM (optional, for LLM-based content generation)
 # Set OLLAMA_ENABLED, OLLAMA_HOST, OLLAMA_MODEL via env vars
